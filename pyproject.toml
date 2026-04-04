@@ -1,0 +1,22 @@
+[project]
+name = "traffic-poison-experiments"
+version = "0.1.0"
+description = "Offline experiment pipeline for traffic forecasting backdoor research."
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.26",
+  "pandas>=2.2",
+  "PyYAML>=6.0",
+  "scipy>=1.13",
+  "matplotlib>=3.9",
+  "torch>=2.0",
+  "h5py>=3.10",
+  "tables>=3.10",
+  "tabulate>=0.9",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,49 @@
+experiment_name: metr_la_stability_s3
+seed: 42
+
+dataset:
+  name: METR-LA
+  data_path: ../data/metr-la.h5
+  data_key: df
+  adjacency_path: ../data/adj_mx.pkl
+  input_len: 12
+  horizon: 12
+  train_ratio: 0.7
+  val_ratio: 0.1
+  test_ratio: 0.2
+  batch_size: 128
+  num_workers: 0
+  fill_missing: true
+  scale: true
+  shuffle_train: false
+
+training:
+  hidden_size: 64
+  num_layers: 2
+  dropout: 0.0
+  lr: 0.0003
+  weight_decay: 0.0001
+  epochs: 35
+  patience: 10
+  loss: mae
+  device: auto
+  repeats: 3
+  grad_clip_norm: 1.0
+
+poison:
+  trigger_steps: 3
+  trigger_node_count: 5
+  poison_ratios: [0.01, 0.03, 0.05]
+  sigma_multipliers: [0.1, 0.2, 0.3]
+  selection_strategies: [random, error, centrality_gradient]
+  target_shift_ratio: 0.10
+  fallback_shift_ratio: 0.05
+  success_tolerance_ratio: 0.03
+
+defense:
+  zscore_threshold: 3.0
+  moving_average_window: 3
+  frequency_band_fraction: 0.25
+
+output:
+  root_dir: ../results
