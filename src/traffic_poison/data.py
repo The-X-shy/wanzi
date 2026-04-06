@@ -104,10 +104,21 @@ def load_traffic_matrix(path: Union[str, Path], key: Optional[str] = None) -> np
         else:
             data = archive[archive.files[0]]
     elif suffix in {".csv"}:
-        data = pd.read_csv(file_path).to_numpy()
+        frame = pd.read_csv(file_path)
+        numeric_frame = frame.select_dtypes(include=[np.number])
+        if numeric_frame.empty and frame.shape[1] > 1:
+            numeric_frame = frame.iloc[:, 1:].apply(pd.to_numeric, errors="coerce")
+        if numeric_frame.empty:
+            raise ValueError("CSV traffic data does not contain any numeric columns.")
+        numeric_frame = numeric_frame.dropna(axis=1, how="all")
+        data = numeric_frame.to_numpy()
     elif suffix in {".pkl", ".pickle"}:
         with file_path.open("rb") as handle:
-            payload = pickle.load(handle)
+            try:
+                payload = pickle.load(handle)
+            except UnicodeDecodeError:
+                handle.seek(0)
+                payload = pickle.load(handle, encoding="latin1")
         if isinstance(payload, (tuple, list)) and payload:
             data = payload[-1]
         elif isinstance(payload, dict):

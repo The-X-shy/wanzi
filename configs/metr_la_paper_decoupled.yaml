@@ -1,0 +1,111 @@
+experiment_name: metr_la_paper_decoupled
+seed: 42
+
+dataset:
+  name: METR-LA
+  data_path: ../data/metr-la.h5
+  data_key: df
+  adjacency_path: ../data/adj_mx.pkl
+  input_len: 12
+  horizon: 12
+  train_ratio: 0.7
+  val_ratio: 0.1
+  test_ratio: 0.2
+  batch_size: 256
+  num_workers: 0
+  fill_missing: true
+  scale: true
+  shuffle_train: false
+
+training:
+  hidden_size: 64
+  num_layers: 2
+  dropout: 0.0
+  lr: 0.0005
+  weight_decay: 0.0
+  epochs: 30
+  patience: 10
+  loss: mae
+  device: auto
+  repeats: 1
+  grad_clip_norm: 0.5
+
+poison:
+  trigger_steps: 3
+  trigger_node_count: 5
+  poison_ratios: [0.018, 0.02, 0.0225]
+  sigma_multipliers: [0.06, 0.065]
+  selection_strategies: [error]
+  window_modes: [tail, hybrid]
+  target_shift_ratio: 0.08
+  target_shift_ratios: [0.08]
+  target_horizon_mode: tail_error
+  target_horizon_modes: [tail_error]
+  target_horizon_count: 3
+  target_horizon_candidates: 5
+  target_horizon_offset: 0
+  fallback_shift_ratio: 0.05
+  time_smoothing_kernel: 3
+  time_smoothing_kernels: [3]
+  frequency_smoothing_strength: 0.6
+  frequency_smoothing_strengths: [0.6]
+  frequency_cutoff_ratio: 0.45
+  frequency_cutoff_ratios: [0.45]
+  frequency_decay: 0.35
+  frequency_decays: [0.35]
+  success_tolerance_ratio: 0.03
+  evaluation_tail_horizon_count: 3
+  max_clean_mae_delta_ratio: 0.05
+  recheck_top_k: 5
+  recheck_repeats: 3
+  search_stages:
+    - name: decoupled_main
+      candidate_groups:
+        - selection_strategies: [error]
+          window_modes: [tail]
+          trigger_steps: [5]
+          trigger_node_count: [3, 5]
+          poison_ratios: [0.018, 0.02, 0.0225]
+          sigma_multipliers: [0.06, 0.065]
+          target_shift_ratios: [0.08]
+          target_horizon_modes: [tail_error]
+          target_horizon_count: [3]
+          time_smoothing_kernels: [3]
+          frequency_smoothing_strengths: [0.6]
+          frequency_cutoff_ratios: [0.45]
+          frequency_decays: [0.35]
+        - selection_strategies: [error]
+          window_modes: [hybrid]
+          trigger_steps: [3]
+          trigger_node_count: [3, 5]
+          poison_ratios: [0.018, 0.02, 0.0225]
+          sigma_multipliers: [0.06, 0.065]
+          target_shift_ratios: [0.08]
+          target_horizon_modes: [tail_error]
+          target_horizon_count: [3]
+          time_smoothing_kernels: [3]
+          frequency_smoothing_strengths: [0.6]
+          frequency_cutoff_ratios: [0.45]
+          frequency_decays: [0.35]
+        - explicit_candidates:
+            - selection_strategy: centrality_gradient
+              window_mode: hybrid
+              trigger_steps: 3
+              trigger_node_count: 5
+              poison_ratio: 0.02
+              sigma_multiplier: 0.06
+              target_shift_ratio: 0.08
+              target_horizon_mode: tail_error
+              target_horizon_count: 3
+              time_smoothing_kernel: 3
+              frequency_smoothing_strength: 0.6
+              frequency_cutoff_ratio: 0.45
+              frequency_decay: 0.35
+
+defense:
+  zscore_threshold: 3.0
+  moving_average_window: 3
+  frequency_band_fraction: 0.25
+
+output:
+  root_dir: ../results
