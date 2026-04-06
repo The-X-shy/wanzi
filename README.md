@@ -1,171 +1,145 @@
-# 交通状态预测投毒实验
+# WANZI: Traffic Forecasting Backdoor Experiments
 
-这个仓库是论文实验的可执行版本，主线固定为：
+这个仓库是一个面向交通预测后门投毒实验的离线实现，主线保持在 `LSTM + METR-LA`，并提供 `PEMS-BAY` 作为补充验证。
 
-- 数据集：`METR-LA`
-- 任务：交通速度预测
-- 模型：`LSTM`
-- 攻击：后门投毒
+## 研究主线
 
-仓库已经包含主实验需要的 `METR-LA` 数据和邻接矩阵，换设备后可以直接跑。
+- 数据集: `METR-LA`
+- 模型: `LSTM`
+- 任务: 交通速度预测
+- 攻击: 后门投毒
+- 主指标: `raw_selected_nodes_tail_horizon_attack_success_rate`
+- 辅助指标: `attack_success_rate`
 
-## 仓库内容
+当前代码已经支持两类实验线:
 
-- `configs/`：实验配置
-- `scripts/`：命令入口
-- `src/traffic_poison/`：数据处理、训练、投毒、评估代码
-- `data/`：数据文件
+- 主结果线: `configs/metr_la_paper_main.yaml`
+- 局部误差优化线: `configs/metr_la_paper_local_error.yaml`
 
-主实验默认使用这些文件：
+## 目录结构
 
-- `data/metr-la.h5`
-- `data/adj_mx.pkl`
+- `configs/`: 基线、正式实验、补充实验配置
+- `scripts/`: 基线、投毒搜索、防御评估、跨数据集验证、结果汇总
+- `src/traffic_poison/`: 数据处理、训练、投毒、评估逻辑
+- `data/`: `METR-LA` 和 `PEMS-BAY` 数据文件
 
-`PEMS-BAY` 没有放进仓库。如果后续要补做交叉验证，自行补充：
+## 环境
 
-- `data/pems-bay.h5`
-- `data/adj_mx_bay.pkl`
-
-## 环境准备
-
-推荐用 Python `3.10+`。
+推荐使用 Python `3.10+`。
 
 ```bash
 git clone https://github.com/The-X-shy/wanzi.git
 cd wanzi
 
-python3 -m venv .venv
-source .venv/bin/activate
-
 python -m pip install --upgrade pip
 pip install -e .
 ```
 
-项目依赖已经写在 `pyproject.toml` 里，包含训练和结果导出会用到的包。
-
-## 先跑什么
-
-### 1. 快速自检
-
-如果只是确认环境没问题，先跑小规模版本：
+如果使用 conda，可以直接运行:
 
 ```bash
-python3 scripts/run_clean_baseline.py --config configs/metr_la_smoke.yaml
-python3 scripts/run_poison_experiments.py --config configs/metr_la_smoke.yaml --baseline-dir <clean输出目录>
-python3 scripts/run_defense_eval.py --config configs/metr_la_smoke.yaml --poison-dir <poison输出目录>
+conda create -n wanzi310 python=3.10
+conda activate wanzi310
+pip install -e .
 ```
 
-### 2. 正式稳定版基线
+## 快速开始
 
-`configs/metr_la.yaml` 已经是当前稳定版主配置，可以直接作为正式训练起点：
+### 1. 干净基线
 
 ```bash
-python3 scripts/run_clean_baseline.py --config configs/metr_la.yaml
+python scripts/run_clean_baseline.py --config configs/metr_la.yaml
 ```
 
-这份配置当前采用的是更稳的训练参数：
-
-- `batch_size = 256`
-- `shuffle_train = false`
-- `dropout = 0.0`
-- `lr = 0.0005`
-- `epochs = 30`
-- `patience = 10`
-- `grad_clip_norm = 0.5`
-
-### 3. 正式投毒搜索
-
-第一轮先跑：
+### 2. 正式投毒搜索
 
 ```bash
-python3 scripts/run_poison_experiments.py --config configs/metr_la_opt_stage1.yaml --baseline-dir <clean输出目录>
+python scripts/run_poison_experiments.py --config configs/metr_la_paper_main.yaml --baseline-dir <clean_output>
 ```
 
-只有在第一轮里已经出现 `clean_MAE_delta_ratio <= 0.05` 的组合时，才继续第二轮：
+### 3. 局部误差优化线
 
 ```bash
-python3 scripts/run_poison_experiments.py --config configs/metr_la_opt_stage2.yaml --baseline-dir <clean输出目录>
+python scripts/run_poison_experiments.py --config configs/metr_la_paper_local_error.yaml --baseline-dir <clean_output>
 ```
 
-如果第一轮没有任何组合满足 `5%` 约束，再改跑回退配置：
+### 4. 防御评估
 
 ```bash
-python3 scripts/run_poison_experiments.py --config configs/metr_la_opt_stage1b.yaml --baseline-dir <clean输出目录>
-python3 scripts/run_poison_experiments.py --config configs/metr_la_opt_stage2b.yaml --baseline-dir <clean输出目录>
+python scripts/run_defense_eval.py --config <对应配置> --poison-dir <poison_output>
 ```
 
-### 4. 防御验证
+### 5. 跨数据集验证
 
 ```bash
-python3 scripts/run_defense_eval.py --config <对应配置文件> --poison-dir <poison输出目录>
+python scripts/run_cross_dataset.py --config configs/pems_bay_paper_local_error.yaml --source-poison-dir <poison_output>
 ```
 
-### 5. 可选的补充复现
+## 当前结果
 
-```bash
-python3 scripts/run_cross_dataset.py --config configs/pems_bay.yaml --best-attack-json <best_attack.json路径>
-```
+### `METR-LA` 干净基线
 
-## 当前建议直接使用的配置
+- 最稳一组 `MAE`: `0.3651`
+- 三次波动: `2.94%`
 
-如果你只是想换设备后继续跑，不需要重新试所有稳定性组合，直接用下面这些：
+### `METR-LA` 主结果
 
-- 正式基线：`configs/metr_la.yaml`
-- 第一轮搜索：`configs/metr_la_opt_stage1.yaml`
-- 第二轮搜索：`configs/metr_la_opt_stage2.yaml`
+- `selection_strategy = error`
+- `window_mode = hybrid`
+- `trigger_steps = 3`
+- `trigger_node_count = 3`
+- `poison_ratio = 0.018`
+- `sigma_multiplier = 0.065`
+- 主指标: `5.61%`
+- `clean_MAE_delta_ratio = 3.59%`
+- 旧口径 `attack_success_rate = 1.70%`
 
-`configs/metr_la_stability_s1.yaml` 到 `configs/metr_la_stability_s5.yaml` 是之前用来压基线波动的对比配置，保留在仓库里，方便以后重新检查稳定性。
+### `METR-LA` 局部误差优化线
 
-## 当前参考结果
+- `sample_selection_mode = local_error_ratio` 或 `hybrid_error_energy`
+- `target_weight_mode = ranked_decay`
+- 单次峰值主指标: `6.03%`
+- 均值主指标: `5.57%`
+- `clean_MAE_delta_ratio = 3.65%`
 
-这是最近一轮服务器结果，可作为换设备后的对照：
+### `PEMS-BAY` 补充验证
 
-### 稳定版基线
+- 主指标: `7.13%`
+- `clean_MAE_delta_ratio = 2.02%`
+- 旧口径 `attack_success_rate = 3.32%`
 
-- 三次 `MAE`：`0.3882 / 0.3748 / 0.3709`
-- 波动：`4.59%`
-- 最优一组：`MAE 0.3709`，`MAPE 164.99`，`RMSE 0.8239`
+## 输出文件
 
-### 当前最优攻击组合
+### 干净基线
 
-- `poison_ratio = 0.02`
-- `sigma = 0.05`
-- `strategy = error`
-- `clean_MAE_delta_ratio = 3.44%`
-- `attack_success_rate = 3.04%`
-- `anomaly_rate = 0.425%`
+- `clean_metrics.csv`
+- `stability.json`
+- `clean_model.pt`
+- `training_curve.png`
+- `prediction_case.png`
 
-### 简单防御结果
+### 投毒实验
 
-- 简单平滑前后：`3.06% -> 3.07%`
-- `z-score` 和频域筛查没有把带毒样本明显区分出来
+- `attack_results.csv`
+- `best_attack.json`
+- `best_poisoned_model.pt`
+- `ablation_table.csv`
+- `stealth_results.csv`
+- `recheck_results.csv`
 
-## 输出文件怎么看
+### 跨数据集验证
 
-### 干净基线目录
+- `cross_candidate_summary.csv`
+- `cross_family_summary.csv`
+- `cross_dataset_summary.json`
 
-- `clean_metrics.csv`：基线误差
-- `stability.json`：三次重复的波动情况
-- `clean_model.pt`：基线模型
-- `training_curve.png`：训练曲线
-- `prediction_case.png`：预测示意图
-
-### 投毒目录
-
-- `attack_results.csv`：所有参数组合结果
-- `best_attack.json`：当前入选组合
-- `best_poisoned_model.pt`：最优带毒模型
-- `ablation_table.csv`：消融表
-- `stealth_results.csv`：隐蔽性结果
-- `trigger_case.png`：触发样例图
-
-### 防御目录
+### 防御评估
 
 - `defense_results.csv`
 - `defense_summary.json`
 
-## 补充说明
+## 说明
 
-- 当前主线只保留 `LSTM`，没有把 `ASTGCN / DCRNN` 拉进主实验。
-- 仓库里没有提交 `results/`，每次运行都会在本地重新生成结果目录。
-- 如果你只是要继续当前论文主线，优先保证基线稳定，再做参数搜索，不要直接跳过基线阶段。
+- 现在保留了 `METR-LA` 的稳定主结果，也保留了最新的局部误差优化实验作为补充结果。
+- 结果导出里新增了 `sample_selection_mode`、`target_weight_mode`、`local_forecast_error_mean`、`global_forecast_error_mean`、`selected_poison_score_mean`，方便对比不同筛选方式。
+- `PEMS-BAY` 数据已经放在仓库里，可以直接复现补充验证。

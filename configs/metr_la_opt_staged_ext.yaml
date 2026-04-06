@@ -1,0 +1,69 @@
+experiment_name: metr_la_opt_staged_ext
+seed: 42
+
+dataset:
+  name: METR-LA
+  data_path: ../data/metr-la.h5
+  data_key: df
+  adjacency_path: ../data/adj_mx.pkl
+  input_len: 12
+  horizon: 12
+  train_ratio: 0.7
+  val_ratio: 0.1
+  test_ratio: 0.2
+  batch_size: 256
+  num_workers: 0
+  fill_missing: true
+  scale: true
+  shuffle_train: false
+
+training:
+  hidden_size: 64
+  num_layers: 2
+  dropout: 0.0
+  lr: 0.0005
+  weight_decay: 0.0
+  epochs: 30
+  patience: 10
+  loss: mae
+  device: auto
+  repeats: 1
+  grad_clip_norm: 0.5
+
+poison:
+  trigger_steps: 3
+  trigger_node_count: 5
+  poison_ratios: [0.018, 0.02, 0.0225, 0.025]
+  sigma_multipliers: [0.055, 0.06, 0.065, 0.07]
+  selection_strategies: [error]
+  window_modes: [tail, hybrid]
+  target_shift_ratio: 0.08
+  target_shift_ratios: [0.08]
+  fallback_shift_ratio: 0.05
+  success_tolerance_ratio: 0.03
+  max_clean_mae_delta_ratio: 0.05
+  recheck_top_k: 5
+  recheck_repeats: 3
+  search_stages:
+    - name: stage_a_ext
+      selection_strategies: [error]
+      poison_ratios: [0.018, 0.02, 0.0225, 0.025]
+      sigma_multipliers: [0.055, 0.06, 0.065, 0.07]
+      target_shift_ratios: [0.08]
+      window_modes: [tail, hybrid]
+      trigger_steps: [3]
+      trigger_node_count: [3, 5]
+    - name: stage_b_ext
+      refine_from_previous: true
+      selection_strategies: [error, centrality_gradient]
+      window_modes: [tail, hybrid]
+      trigger_steps: [3, 4, 5]
+      trigger_node_count: [3, 5, 7]
+
+defense:
+  zscore_threshold: 3.0
+  moving_average_window: 3
+  frequency_band_fraction: 0.25
+
+output:
+  root_dir: ../results

@@ -102,6 +102,24 @@ def main() -> None:
 
     save_table(rows, run_dir / "clean_metrics.csv")
     save_json(stability, run_dir / "stability.json")
+    save_table(
+        [
+            {
+                "dataset_name": config["dataset"].get("name", "unknown"),
+                "repeat_count": repeats,
+                "best_seed": best_payload["seed"],
+                "best_MAE": float(best_payload["test_metrics"]["MAE"]),
+                "best_MAPE": float(best_payload["test_metrics"]["MAPE"]),
+                "best_RMSE": float(best_payload["test_metrics"]["RMSE"]),
+                "mae_mean": mean_mae,
+                "mae_min": float(min(maes)),
+                "mae_max": float(max(maes)),
+                "mae_relative_spread": relative_spread,
+                "stable_under_5_percent": relative_spread <= 0.05,
+            }
+        ],
+        run_dir / "baseline_stability_table.csv",
+    )
 
     best_checkpoint = {
         "seed": best_payload["seed"],
