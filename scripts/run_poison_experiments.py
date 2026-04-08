@@ -36,6 +36,13 @@ from traffic_poison.poisoning import (
     rank_vulnerable_positions,
 )
 from traffic_poison.reporting import plot_prediction_case, plot_trigger_case, save_table
+from traffic_poison.thesis_contract import (
+    candidate_contract_flags,
+    choose_best_row,
+    evaluate_main_result_standards,
+    resolve_thesis_contract,
+    row_sort_key,
+)
 from traffic_poison.trainer import evaluate_model, train_model
 from traffic_poison.utils import create_run_dir, flatten_metrics, save_json, set_seed
 
@@ -57,62 +64,6 @@ def as_list(value: Any) -> list[Any]:
     return [value]
 
 
-def score_row(row: dict[str, Any]) -> tuple[float, ...]:
-    primary_local_asr = float(
-        row.get(
-            "raw_selected_nodes_tail_horizon_attack_success_rate",
-            row.get(
-                "raw_selected_nodes_attack_success_rate",
-                row.get("raw_global_attack_success_rate", row.get("attack_success_rate", 0.0)),
-            ),
-        )
-    )
-    secondary_local_asr = float(
-        row.get(
-            "raw_selected_nodes_attack_success_rate",
-            row.get("raw_global_attack_success_rate", row.get("attack_success_rate", 0.0)),
-        )
-    )
-    primary_shift = float(
-        row.get(
-            "raw_selected_nodes_tail_horizon_target_shift_attainment",
-            row.get(
-                "raw_selected_nodes_target_shift_attainment",
-                row.get("raw_global_target_shift_attainment", row.get("target_shift_attainment", 0.0)),
-            ),
-        )
-    )
-    return (
-        primary_local_asr,
-        secondary_local_asr,
-        float(row.get("attack_success_rate", 0.0)),
-        primary_shift,
-        -abs(float(row.get("clean_MAE_delta_ratio", 0.0))),
-        -float(row.get("frequency_energy_shift", row.get("anomaly_rate", 0.0))),
-        -float(row.get("mean_z_score", 0.0)),
-        -float(row.get("anomaly_rate", 0.0)),
-    )
-
-
-def within_clean_budget(row: dict[str, Any] | None, max_clean_mae_delta_ratio: float) -> bool:
-    if row is None:
-        return False
-    return float(row.get("clean_MAE_delta_ratio", float("inf"))) <= max_clean_mae_delta_ratio
-
-
-def row_sort_key(row: dict[str, Any], max_clean_mae_delta_ratio: float) -> tuple[float, ...]:
-    return (
-        1.0 if within_clean_budget(row, max_clean_mae_delta_ratio) else 0.0,
-        *score_row(row),
-    )
-
-
-def choose_best_row(rows: list[dict[str, Any]], max_clean_mae_delta_ratio: float) -> dict[str, Any] | None:
-    if not rows:
-        return None
-    return max(rows, key=lambda row: row_sort_key(row, max_clean_mae_delta_ratio))
-
-
 def candidate_from_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "selection_strategy": str(row["selection_strategy"]),
@@ -130,6 +81,10 @@ def candidate_from_row(row: dict[str, Any]) -> dict[str, Any]:
         "frequency_smoothing_strength": float(row.get("frequency_smoothing_strength", 0.0)),
         "frequency_cutoff_ratio": float(row.get("frequency_cutoff_ratio", 0.5)),
         "frequency_decay": float(row.get("frequency_decay", 0.35)),
+        "loss_focus_mode": str(row.get("loss_focus_mode", "uniform")),
+        "loss_selected_node_weight": float(row.get("loss_selected_node_weight", 1.15)),
+        "loss_tail_horizon_weight": float(row.get("loss_tail_horizon_weight", 1.75)),
+        "loss_headroom_boost": float(row.get("loss_headroom_boost", 0.4)),
     }
 
 
@@ -184,6 +139,30 @@ def normalize_candidate(candidate: dict[str, Any], poison_cfg: dict[str, Any]) -
                 poison_cfg.get("frequency_decays", [poison_cfg.get("frequency_decay", 0.35)])[0],
             )
         ),
+        "loss_focus_mode": str(
+            candidate.get(
+                "loss_focus_mode",
+                poison_cfg.get("loss_focus_modes", [poison_cfg.get("loss_focus_mode", "uniform")])[0],
+            )
+        ),
+        "loss_selected_node_weight": float(
+            candidate.get(
+                "loss_selected_node_weight",
+                poison_cfg.get("loss_selected_node_weights", [poison_cfg.get("loss_selected_node_weight", 1.15)])[0],
+            )
+        ),
+        "loss_tail_horizon_weight": float(
+            candidate.get(
+                "loss_tail_horizon_weight",
+                poison_cfg.get("loss_tail_horizon_weights", [poison_cfg.get("loss_tail_horizon_weight", 1.75)])[0],
+            )
+        ),
+        "loss_headroom_boost": float(
+            candidate.get(
+                "loss_headroom_boost",
+                poison_cfg.get("loss_headroom_boosts", [poison_cfg.get("loss_headroom_boost", 0.4)])[0],
+            )
+        ),
     }
 
 
@@ -204,6 +183,10 @@ def candidate_key(candidate: dict[str, Any]) -> str:
         "frequency_smoothing_strength": round(float(candidate["frequency_smoothing_strength"]), 8),
         "frequency_cutoff_ratio": round(float(candidate["frequency_cutoff_ratio"]), 8),
         "frequency_decay": round(float(candidate.get("frequency_decay", 0.35)), 8),
+        "loss_focus_mode": str(candidate.get("loss_focus_mode", "uniform")),
+        "loss_selected_node_weight": round(float(candidate.get("loss_selected_node_weight", 1.15)), 8),
+        "loss_tail_horizon_weight": round(float(candidate.get("loss_tail_horizon_weight", 1.75)), 8),
+        "loss_headroom_boost": round(float(candidate.get("loss_headroom_boost", 0.4)), 8),
     }
     return json.dumps(serializable, sort_keys=True)
 
@@ -246,6 +229,19 @@ def build_search_stages(poison_cfg: dict[str, Any]) -> list[dict[str, Any]]:
             ),
             "frequency_cutoff_ratios": poison_cfg.get("frequency_cutoff_ratios", [poison_cfg.get("frequency_cutoff_ratio", 0.5)]),
             "frequency_decays": poison_cfg.get("frequency_decays", [poison_cfg.get("frequency_decay", 0.35)]),
+            "loss_focus_modes": poison_cfg.get("loss_focus_modes", [poison_cfg.get("loss_focus_mode", "uniform")]),
+            "loss_selected_node_weights": poison_cfg.get(
+                "loss_selected_node_weights",
+                [poison_cfg.get("loss_selected_node_weight", 1.15)],
+            ),
+            "loss_tail_horizon_weights": poison_cfg.get(
+                "loss_tail_horizon_weights",
+                [poison_cfg.get("loss_tail_horizon_weight", 1.75)],
+            ),
+            "loss_headroom_boosts": poison_cfg.get(
+                "loss_headroom_boosts",
+                [poison_cfg.get("loss_headroom_boost", 0.4)],
+            ),
             "refine_from_previous": False,
         }
     ]
@@ -398,6 +394,38 @@ def resolve_stage_candidates(
             "frequency_decay",
         )
     ]
+    loss_focus_modes = [
+        str(value)
+        for value in resolve_values(
+            "loss_focus_modes",
+            poison_cfg.get("loss_focus_modes", [poison_cfg.get("loss_focus_mode", "uniform")]),
+            "loss_focus_mode",
+        )
+    ]
+    loss_selected_node_weights = [
+        float(value)
+        for value in resolve_values(
+            "loss_selected_node_weights",
+            poison_cfg.get("loss_selected_node_weights", [poison_cfg.get("loss_selected_node_weight", 1.15)]),
+            "loss_selected_node_weight",
+        )
+    ]
+    loss_tail_horizon_weights = [
+        float(value)
+        for value in resolve_values(
+            "loss_tail_horizon_weights",
+            poison_cfg.get("loss_tail_horizon_weights", [poison_cfg.get("loss_tail_horizon_weight", 1.75)]),
+            "loss_tail_horizon_weight",
+        )
+    ]
+    loss_headroom_boosts = [
+        float(value)
+        for value in resolve_values(
+            "loss_headroom_boosts",
+            poison_cfg.get("loss_headroom_boosts", [poison_cfg.get("loss_headroom_boost", 0.4)]),
+            "loss_headroom_boost",
+        )
+    ]
 
     candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -417,6 +445,10 @@ def resolve_stage_candidates(
         frequency_smoothing_strengths,
         frequency_cutoff_ratios,
         frequency_decays,
+        loss_focus_modes,
+        loss_selected_node_weights,
+        loss_tail_horizon_weights,
+        loss_headroom_boosts,
     ):
         candidate = {
             "selection_strategy": combo[0],
@@ -434,6 +466,10 @@ def resolve_stage_candidates(
             "frequency_smoothing_strength": float(combo[12]),
             "frequency_cutoff_ratio": float(combo[13]),
             "frequency_decay": float(combo[14]),
+            "loss_focus_mode": str(combo[15]),
+            "loss_selected_node_weight": float(combo[16]),
+            "loss_tail_horizon_weight": float(combo[17]),
+            "loss_headroom_boost": float(combo[18]),
         }
         key = candidate_key(candidate)
         if key in seen:
@@ -468,6 +504,7 @@ def load_or_train_baseline(config: dict[str, Any], baseline_dir: str | None):
 def evaluate_attack_candidate(
     *,
     config: dict[str, Any],
+    thesis_contract: dict[str, Any],
     bundle,
     baseline_metrics: dict[str, float],
     baseline_true: np.ndarray,
@@ -524,11 +561,20 @@ def evaluate_attack_candidate(
         frequency_smoothing_strength=float(candidate["frequency_smoothing_strength"]),
         frequency_cutoff_ratio=float(candidate["frequency_cutoff_ratio"]),
         frequency_decay=float(candidate.get("frequency_decay", 0.35)),
+        headroom_floor=float(poison_cfg.get("headroom_floor", 0.0)),
+        headroom_error_mix=float(poison_cfg.get("headroom_error_mix", 0.6)),
+        global_shift_fraction=float(poison_cfg.get("global_shift_fraction", 0.3)),
+        tail_focus_multiplier=float(poison_cfg.get("tail_focus_multiplier", 1.6)),
+        loss_focus_mode=str(candidate.get("loss_focus_mode", poison_cfg.get("loss_focus_mode", "uniform"))),
+        loss_selected_node_weight=float(candidate.get("loss_selected_node_weight", poison_cfg.get("loss_selected_node_weight", 1.15))),
+        loss_tail_horizon_weight=float(candidate.get("loss_tail_horizon_weight", poison_cfg.get("loss_tail_horizon_weight", 1.75))),
+        loss_headroom_boost=float(candidate.get("loss_headroom_boost", poison_cfg.get("loss_headroom_boost", 0.4))),
     )
 
     poisoned_loader = make_loader(
         np.asarray(poisoned_train["poisoned_inputs"]),
         np.asarray(poisoned_train["poisoned_targets"]),
+        loss_weights=np.asarray(poisoned_train["poisoned_loss_weights"]),
         batch_size=int(dataset_cfg.get("batch_size", 64)),
         shuffle=True,
         num_workers=int(dataset_cfg.get("num_workers", 0)),
@@ -562,6 +608,14 @@ def evaluate_attack_candidate(
         frequency_smoothing_strength=float(candidate["frequency_smoothing_strength"]),
         frequency_cutoff_ratio=float(candidate["frequency_cutoff_ratio"]),
         frequency_decay=float(candidate.get("frequency_decay", 0.35)),
+        headroom_floor=float(poison_cfg.get("headroom_floor", 0.0)),
+        headroom_error_mix=float(poison_cfg.get("headroom_error_mix", 0.6)),
+        global_shift_fraction=float(poison_cfg.get("global_shift_fraction", 0.3)),
+        tail_focus_multiplier=float(poison_cfg.get("tail_focus_multiplier", 1.6)),
+        loss_focus_mode=str(candidate.get("loss_focus_mode", poison_cfg.get("loss_focus_mode", "uniform"))),
+        loss_selected_node_weight=float(candidate.get("loss_selected_node_weight", poison_cfg.get("loss_selected_node_weight", 1.15))),
+        loss_tail_horizon_weight=float(candidate.get("loss_tail_horizon_weight", poison_cfg.get("loss_tail_horizon_weight", 1.75))),
+        loss_headroom_boost=float(candidate.get("loss_headroom_boost", poison_cfg.get("loss_headroom_boost", 0.4))),
     )
     triggered_inputs = np.asarray(triggered_test["poisoned_inputs"])
     triggered_metrics, _, triggered_pred = evaluate_on_arrays(
@@ -612,6 +666,10 @@ def evaluate_attack_candidate(
         "frequency_smoothing_strength": float(candidate["frequency_smoothing_strength"]),
         "frequency_cutoff_ratio": float(candidate["frequency_cutoff_ratio"]),
         "frequency_decay": float(candidate.get("frequency_decay", 0.35)),
+        "loss_focus_mode": str(candidate.get("loss_focus_mode", "uniform")),
+        "loss_selected_node_weight": float(candidate.get("loss_selected_node_weight", 1.15)),
+        "loss_tail_horizon_weight": float(candidate.get("loss_tail_horizon_weight", 1.75)),
+        "loss_headroom_boost": float(candidate.get("loss_headroom_boost", 0.4)),
         "selected_nodes": ",".join(str(node) for node in poisoned_train["selected_nodes"]),
         "selected_time_indices": ",".join(str(idx) for idx in poisoned_train["selected_time_indices"]),
         "selected_target_horizon_indices": ",".join(str(idx) for idx in poisoned_train["selected_target_horizon_indices"]),
@@ -621,6 +679,9 @@ def evaluate_attack_candidate(
         "local_forecast_error_mean": float(poisoned_train.get("local_forecast_error_mean", 0.0)),
         "global_forecast_error_mean": float(poisoned_train.get("global_forecast_error_mean", 0.0)),
         "selected_poison_score_mean": float(poisoned_train.get("selected_poison_score_mean", 0.0)),
+        "positive_headroom_rate": float(poisoned_train.get("positive_headroom_rate", 0.0)),
+        "selected_headroom_mean": float(poisoned_train.get("selected_headroom_mean", 0.0)),
+        "selected_headroom_score_mean": float(poisoned_train.get("selected_headroom_score_mean", 0.0)),
         **flatten_metrics("baseline", baseline_metrics),
         **flatten_metrics("clean", clean_metrics),
         **flatten_metrics("triggered", triggered_metrics),
@@ -632,6 +693,7 @@ def evaluate_attack_candidate(
         **eval_views,
         **stealth_metrics,
     }
+    row.update(candidate_contract_flags(row, thesis_contract))
 
     stealth_row = {
         "stage_name": stage_name,
@@ -695,6 +757,10 @@ def summarize_recheck_rows(candidate_rows: list[dict[str, Any]]) -> dict[str, An
         "frequency_smoothing_strength": float(candidate_rows[0]["frequency_smoothing_strength"]),
         "frequency_cutoff_ratio": float(candidate_rows[0]["frequency_cutoff_ratio"]),
         "frequency_decay": float(candidate_rows[0].get("frequency_decay", 0.35)),
+        "loss_focus_mode": str(candidate_rows[0].get("loss_focus_mode", "uniform")),
+        "loss_selected_node_weight": float(candidate_rows[0].get("loss_selected_node_weight", 1.15)),
+        "loss_tail_horizon_weight": float(candidate_rows[0].get("loss_tail_horizon_weight", 1.75)),
+        "loss_headroom_boost": float(candidate_rows[0].get("loss_headroom_boost", 0.4)),
         "selected_nodes": str(candidate_rows[0]["selected_nodes"]),
         "selected_time_indices": str(candidate_rows[0]["selected_time_indices"]),
         "selected_target_horizon_indices": str(candidate_rows[0].get("selected_target_horizon_indices", "")),
@@ -709,6 +775,7 @@ def summarize_recheck_rows(candidate_rows: list[dict[str, Any]]) -> dict[str, An
         "window_mode",
         "sample_selection_mode",
         "target_weight_mode",
+        "loss_focus_mode",
         "target_horizon_mode",
         "selected_nodes",
         "selected_time_indices",
@@ -746,14 +813,14 @@ def summarize_recheck_rows(candidate_rows: list[dict[str, Any]]) -> dict[str, An
 
 def select_top_candidates(
     rows: list[dict[str, Any]],
-    max_clean_mae_delta_ratio: float,
+    thesis_contract: dict[str, Any],
     top_k: int,
 ) -> list[dict[str, Any]]:
     if top_k <= 0:
         return []
     deduped: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for row in sorted(rows, key=lambda item: row_sort_key(item, max_clean_mae_delta_ratio), reverse=True):
+    for row in sorted(rows, key=lambda item: row_sort_key(item, thesis_contract), reverse=True):
         key = candidate_key(candidate_from_row(row))
         if key in seen:
             continue
@@ -767,6 +834,7 @@ def select_top_candidates(
 def main() -> None:
     args = parse_args()
     config = load_config(args.config)
+    thesis_contract = resolve_thesis_contract(config)
     dataset_name = str(config["dataset"].get("name", "dataset")).lower().replace("-", "_")
     run_dir = create_run_dir(config["output"]["root_dir"], f"{dataset_name}_poison")
 
@@ -778,7 +846,6 @@ def main() -> None:
 
     poison_cfg = config["poison"]
     base_seed = int(config.get("seed", 42))
-    max_clean_mae_delta_ratio = float(poison_cfg.get("max_clean_mae_delta_ratio", 0.05))
     search_stages = build_search_stages(poison_cfg)
 
     all_rows: list[dict[str, Any]] = []
@@ -797,6 +864,7 @@ def main() -> None:
         for candidate in candidates:
             row, stealth_row, _ = evaluate_attack_candidate(
                 config=config,
+                thesis_contract=thesis_contract,
                 bundle=bundle,
                 baseline_metrics=baseline_metrics,
                 baseline_true=baseline_true,
@@ -810,7 +878,7 @@ def main() -> None:
             stage_rows.append(row)
             stage_stealth_rows.append(stealth_row)
 
-        stage_best = choose_best_row(stage_rows, max_clean_mae_delta_ratio)
+        stage_best = choose_best_row(stage_rows, thesis_contract)
         if stage_best is None:
             raise RuntimeError(f"Search stage '{stage_name}' did not produce any rows.")
 
@@ -828,13 +896,13 @@ def main() -> None:
 
     final_stage_name = stage_name_from_cfg(search_stages[-1], len(search_stages) - 1)
     final_stage_rows = [row for row in all_rows if row["stage_name"] == final_stage_name]
-    pre_recheck_best = choose_best_row(final_stage_rows, max_clean_mae_delta_ratio)
+    pre_recheck_best = choose_best_row(final_stage_rows, thesis_contract)
     if pre_recheck_best is None:
         raise RuntimeError("Final poisoning stage did not produce any rows.")
 
     recheck_top_k = int(poison_cfg.get("recheck_top_k", 0))
     recheck_repeats = max(1, int(poison_cfg.get("recheck_repeats", 1)))
-    recheck_candidates = select_top_candidates(final_stage_rows, max_clean_mae_delta_ratio, recheck_top_k)
+    recheck_candidates = select_top_candidates(final_stage_rows, thesis_contract, recheck_top_k)
 
     recheck_repeat_rows: list[dict[str, Any]] = []
     recheck_summary_rows: list[dict[str, Any]] = []
@@ -850,6 +918,7 @@ def main() -> None:
             for repeat_idx in range(recheck_repeats):
                 row, _, payload = evaluate_attack_candidate(
                     config=config,
+                    thesis_contract=thesis_contract,
                     bundle=bundle,
                     baseline_metrics=baseline_metrics,
                     baseline_true=baseline_true,
@@ -865,11 +934,12 @@ def main() -> None:
                 candidate_rows.append(row)
                 recheck_repeat_rows.append(row)
 
-                if candidate_best_row is None or row_sort_key(row, max_clean_mae_delta_ratio) > row_sort_key(candidate_best_row, max_clean_mae_delta_ratio):
+                if candidate_best_row is None or row_sort_key(row, thesis_contract) > row_sort_key(candidate_best_row, thesis_contract):
                     candidate_best_row = row
                     candidate_best_payload = payload
 
             summary_row = summarize_recheck_rows(candidate_rows)
+            summary_row.update(candidate_contract_flags(summary_row, thesis_contract))
             summary_row["candidate_rank"] = int(candidate_rank)
             recheck_summary_rows.append(summary_row)
 
@@ -878,7 +948,7 @@ def main() -> None:
                 best_repeat_row_by_candidate[key] = candidate_best_row
                 best_repeat_payload_by_candidate[key] = candidate_best_payload
 
-    final_best_row = choose_best_row(recheck_summary_rows, max_clean_mae_delta_ratio) if recheck_summary_rows else None
+    final_best_row = choose_best_row(recheck_summary_rows, thesis_contract) if recheck_summary_rows else None
     final_payload: dict[str, Any] | None = None
 
     if final_best_row is not None:
@@ -893,6 +963,7 @@ def main() -> None:
     else:
         _, _, final_payload = evaluate_attack_candidate(
             config=config,
+            thesis_contract=thesis_contract,
             bundle=bundle,
             baseline_metrics=baseline_metrics,
             baseline_true=baseline_true,
@@ -957,6 +1028,8 @@ def main() -> None:
             "final_best": final_best_row,
             "recheck_candidate_count": len(recheck_candidates),
             "recheck_repeat_count": recheck_repeats if recheck_candidates else 0,
+            "thesis_contract": thesis_contract,
+            "contract_summary": evaluate_main_result_standards(final_best_row, None, None, thesis_contract),
         },
         run_dir / "search_summary.json",
     )
