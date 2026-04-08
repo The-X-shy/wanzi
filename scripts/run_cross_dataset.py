@@ -33,6 +33,15 @@ from traffic_poison.poisoning import (
     rank_vulnerable_positions,
 )
 from traffic_poison.reporting import plot_prediction_case, save_table
+from traffic_poison.thesis_contract import (
+    candidate_contract_flags,
+    choose_best_row,
+    eligible_for_cross_replay,
+    evaluate_cross_result_standards,
+    resolve_thesis_contract,
+    row_sort_key,
+    within_clean_budget,
+)
 from traffic_poison.trainer import evaluate_model, train_model
 from traffic_poison.utils import create_run_dir, save_json, set_seed
 
@@ -49,56 +58,6 @@ def parse_args() -> argparse.Namespace:
         help="Optional source poisoning directory. When set, the script selects multiple candidates from attack_results.csv.",
     )
     return parser.parse_args()
-
-
-def score_row(row: dict[str, Any]) -> tuple[float, ...]:
-    primary_local_asr = float(
-        row.get(
-            "raw_selected_nodes_tail_horizon_attack_success_rate",
-            row.get(
-                "raw_selected_nodes_attack_success_rate",
-                row.get("raw_global_attack_success_rate", row.get("attack_success_rate", 0.0)),
-            ),
-        )
-    )
-    secondary_local_asr = float(
-        row.get(
-            "raw_selected_nodes_attack_success_rate",
-            row.get("raw_global_attack_success_rate", row.get("attack_success_rate", 0.0)),
-        )
-    )
-    primary_shift = float(
-        row.get(
-            "raw_selected_nodes_tail_horizon_target_shift_attainment",
-            row.get(
-                "raw_selected_nodes_target_shift_attainment",
-                row.get("raw_global_target_shift_attainment", row.get("target_shift_attainment", 0.0)),
-            ),
-        )
-    )
-    return (
-        primary_local_asr,
-        secondary_local_asr,
-        float(row.get("attack_success_rate", 0.0)),
-        primary_shift,
-        -abs(float(row.get("clean_MAE_delta_ratio", 0.0))),
-        -float(row.get("frequency_energy_shift", row.get("anomaly_rate", 0.0))),
-        -float(row.get("mean_z_score", 0.0)),
-        -float(row.get("anomaly_rate", 0.0)),
-    )
-
-
-def within_clean_budget(row: dict[str, Any] | None, max_clean_mae_delta_ratio: float) -> bool:
-    if row is None:
-        return False
-    return float(row.get("clean_MAE_delta_ratio", float("inf"))) <= max_clean_mae_delta_ratio
-
-
-def row_sort_key(row: dict[str, Any], max_clean_mae_delta_ratio: float) -> tuple[float, ...]:
-    return (
-        1.0 if within_clean_budget(row, max_clean_mae_delta_ratio) else 0.0,
-        *score_row(row),
-    )
 
 
 def candidate_from_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -118,6 +77,10 @@ def candidate_from_row(row: dict[str, Any]) -> dict[str, Any]:
         "frequency_smoothing_strength": float(row.get("frequency_smoothing_strength", 0.0)),
         "frequency_cutoff_ratio": float(row.get("frequency_cutoff_ratio", 0.5)),
         "frequency_decay": float(row.get("frequency_decay", 0.35)),
+        "loss_focus_mode": str(row.get("loss_focus_mode", "uniform")),
+        "loss_selected_node_weight": float(row.get("loss_selected_node_weight", 1.15)),
+        "loss_tail_horizon_weight": float(row.get("loss_tail_horizon_weight", 1.75)),
+        "loss_headroom_boost": float(row.get("loss_headroom_boost", 0.4)),
     }
     for key in ("local_forecast_error_mean", "global_forecast_error_mean", "selected_poison_score_mean"):
         if key in row and row[key] not in {None, ""}:
@@ -142,14 +105,12 @@ def candidate_key(candidate: dict[str, Any]) -> str:
         "frequency_smoothing_strength": round(float(candidate["frequency_smoothing_strength"]), 8),
         "frequency_cutoff_ratio": round(float(candidate["frequency_cutoff_ratio"]), 8),
         "frequency_decay": round(float(candidate.get("frequency_decay", 0.35)), 8),
+        "loss_focus_mode": str(candidate.get("loss_focus_mode", "uniform")),
+        "loss_selected_node_weight": round(float(candidate.get("loss_selected_node_weight", 1.15)), 8),
+        "loss_tail_horizon_weight": round(float(candidate.get("loss_tail_horizon_weight", 1.75)), 8),
+        "loss_headroom_boost": round(float(candidate.get("loss_headroom_boost", 0.4)), 8),
     }
     return json.dumps(serializable, sort_keys=True)
-
-
-def choose_best_row(rows: list[dict[str, Any]], max_clean_mae_delta_ratio: float) -> dict[str, Any] | None:
-    if not rows:
-        return None
-    return max(rows, key=lambda row: row_sort_key(row, max_clean_mae_delta_ratio))
 
 
 def load_source_rows(path: Path) -> list[dict[str, Any]]:
@@ -179,11 +140,15 @@ def load_source_rows(path: Path) -> list[dict[str, Any]]:
                 "local_forecast_error_mean",
                 "global_forecast_error_mean",
                 "selected_poison_score_mean",
+                "loss_selected_node_weight",
+                "loss_tail_horizon_weight",
+                "loss_headroom_boost",
             ):
                 if key in parsed and parsed[key] not in {None, ""}:
                     if key in {
                         "sample_selection_mode",
                         "target_weight_mode",
+                        "loss_focus_mode",
                     }:
                         parsed[key] = str(parsed[key])
                     else:
@@ -192,15 +157,19 @@ def load_source_rows(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def select_candidates_from_source(source_poison_dir: Path, config: dict[str, Any]) -> list[dict[str, Any]]:
+def select_candidates_from_source(
+    source_poison_dir: Path,
+    config: dict[str, Any],
+    thesis_contract: dict[str, Any],
+) -> list[dict[str, Any]]:
     cross_cfg = dict(config.get("cross_validation", {}))
     source_table = str(cross_cfg.get("source_table", "attack_results.csv"))
     source_rows = load_source_rows(source_poison_dir / source_table)
-    max_clean_mae_delta_ratio = float(cross_cfg.get("max_clean_mae_delta_ratio", 0.05))
     allowed_selection = {str(value) for value in cross_cfg.get("selection_strategies", ["error"])}
     allowed_poison_ratios = {round(float(value), 8) for value in cross_cfg.get("poison_ratios", [])}
     allowed_sigmas = {round(float(value), 8) for value in cross_cfg.get("sigma_multipliers", [])}
     allowed_node_counts = {int(value) for value in cross_cfg.get("trigger_node_count", [])}
+    enforce_source_contract_gate = bool(cross_cfg.get("enforce_source_contract_gate", False))
 
     deduped: dict[str, dict[str, Any]] = {}
     for row in source_rows:
@@ -212,11 +181,13 @@ def select_candidates_from_source(source_poison_dir: Path, config: dict[str, Any
             continue
         if allowed_node_counts and int(float(row.get("trigger_node_count", 0))) not in allowed_node_counts:
             continue
-        if not within_clean_budget(row, max_clean_mae_delta_ratio):
+        if not within_clean_budget(row, thesis_contract):
+            continue
+        if enforce_source_contract_gate and not eligible_for_cross_replay(row, thesis_contract):
             continue
         key = candidate_key(candidate_from_row(row))
         best_existing = deduped.get(key)
-        if best_existing is None or row_sort_key(row, max_clean_mae_delta_ratio) > row_sort_key(best_existing, max_clean_mae_delta_ratio):
+        if best_existing is None or row_sort_key(row, thesis_contract) > row_sort_key(best_existing, thesis_contract):
             deduped[key] = row
 
     family_order = [str(value) for value in cross_cfg.get("family_order", ["tail", "hybrid"])]
@@ -235,7 +206,7 @@ def select_candidates_from_source(source_poison_dir: Path, config: dict[str, Any
             if str(row.get("window_mode")) in window_modes
             and (not trigger_steps or int(float(row.get("trigger_steps", 0))) in trigger_steps)
         ]
-        family_rows.sort(key=lambda row: row_sort_key(row, max_clean_mae_delta_ratio), reverse=True)
+        family_rows.sort(key=lambda row: row_sort_key(row, thesis_contract), reverse=True)
 
         for rank, row in enumerate(family_rows[:family_top_k], start=1):
             candidate = candidate_from_row(row)
@@ -319,6 +290,7 @@ def run_frozen_baseline(config: dict[str, Any]) -> tuple[list[dict[str, Any]], d
 def evaluate_attack_candidate(
     *,
     config: dict[str, Any],
+    thesis_contract: dict[str, Any],
     baseline_payload: dict[str, Any],
     baseline_metrics: dict[str, float],
     candidate: dict[str, Any],
@@ -368,10 +340,19 @@ def evaluate_attack_candidate(
         frequency_smoothing_strength=float(candidate["frequency_smoothing_strength"]),
         frequency_cutoff_ratio=float(candidate["frequency_cutoff_ratio"]),
         frequency_decay=float(candidate.get("frequency_decay", 0.35)),
+        headroom_floor=float(config["poison"].get("headroom_floor", 0.0)),
+        headroom_error_mix=float(config["poison"].get("headroom_error_mix", 0.6)),
+        global_shift_fraction=float(config["poison"].get("global_shift_fraction", 0.3)),
+        tail_focus_multiplier=float(config["poison"].get("tail_focus_multiplier", 1.6)),
+        loss_focus_mode=str(candidate.get("loss_focus_mode", config["poison"].get("loss_focus_mode", "uniform"))),
+        loss_selected_node_weight=float(candidate.get("loss_selected_node_weight", config["poison"].get("loss_selected_node_weight", 1.15))),
+        loss_tail_horizon_weight=float(candidate.get("loss_tail_horizon_weight", config["poison"].get("loss_tail_horizon_weight", 1.75))),
+        loss_headroom_boost=float(candidate.get("loss_headroom_boost", config["poison"].get("loss_headroom_boost", 0.4))),
     )
     poisoned_loader = make_loader(
         np.asarray(poisoned_train["poisoned_inputs"]),
         np.asarray(poisoned_train["poisoned_targets"]),
+        loss_weights=np.asarray(poisoned_train["poisoned_loss_weights"]),
         batch_size=int(config["dataset"].get("batch_size", 64)),
         shuffle=True,
         num_workers=int(config["dataset"].get("num_workers", 0)),
@@ -405,6 +386,14 @@ def evaluate_attack_candidate(
         frequency_smoothing_strength=float(candidate["frequency_smoothing_strength"]),
         frequency_cutoff_ratio=float(candidate["frequency_cutoff_ratio"]),
         frequency_decay=float(candidate.get("frequency_decay", 0.35)),
+        headroom_floor=float(config["poison"].get("headroom_floor", 0.0)),
+        headroom_error_mix=float(config["poison"].get("headroom_error_mix", 0.6)),
+        global_shift_fraction=float(config["poison"].get("global_shift_fraction", 0.3)),
+        tail_focus_multiplier=float(config["poison"].get("tail_focus_multiplier", 1.6)),
+        loss_focus_mode=str(candidate.get("loss_focus_mode", config["poison"].get("loss_focus_mode", "uniform"))),
+        loss_selected_node_weight=float(candidate.get("loss_selected_node_weight", config["poison"].get("loss_selected_node_weight", 1.15))),
+        loss_tail_horizon_weight=float(candidate.get("loss_tail_horizon_weight", config["poison"].get("loss_tail_horizon_weight", 1.75))),
+        loss_headroom_boost=float(candidate.get("loss_headroom_boost", config["poison"].get("loss_headroom_boost", 0.4))),
     )
     triggered_inputs = np.asarray(triggered_test["poisoned_inputs"])
     triggered_metrics, _, triggered_pred = evaluate_on_arrays(
@@ -450,6 +439,10 @@ def evaluate_attack_candidate(
         "frequency_smoothing_strength": float(candidate["frequency_smoothing_strength"]),
         "frequency_cutoff_ratio": float(candidate["frequency_cutoff_ratio"]),
         "frequency_decay": float(candidate.get("frequency_decay", 0.35)),
+        "loss_focus_mode": str(candidate.get("loss_focus_mode", "uniform")),
+        "loss_selected_node_weight": float(candidate.get("loss_selected_node_weight", 1.15)),
+        "loss_tail_horizon_weight": float(candidate.get("loss_tail_horizon_weight", 1.75)),
+        "loss_headroom_boost": float(candidate.get("loss_headroom_boost", 0.4)),
         "poison_ratio": float(candidate["poison_ratio"]),
         "sigma_multiplier": float(candidate["sigma_multiplier"]),
         "target_shift_ratio": float(candidate["target_shift_ratio"]),
@@ -471,10 +464,14 @@ def evaluate_attack_candidate(
         "local_forecast_error_mean": float(poisoned_train.get("local_forecast_error_mean", 0.0)),
         "global_forecast_error_mean": float(poisoned_train.get("global_forecast_error_mean", 0.0)),
         "selected_poison_score_mean": float(poisoned_train.get("selected_poison_score_mean", 0.0)),
+        "positive_headroom_rate": float(poisoned_train.get("positive_headroom_rate", 0.0)),
+        "selected_headroom_mean": float(poisoned_train.get("selected_headroom_mean", 0.0)),
+        "selected_headroom_score_mean": float(poisoned_train.get("selected_headroom_score_mean", 0.0)),
         **shift_metrics,
         **eval_views,
         **stealth,
     }
+    row.update(candidate_contract_flags(row, thesis_contract))
 
     payload = {
         "row": row,
@@ -502,6 +499,10 @@ def summarize_candidate_rows(candidate_rows: list[dict[str, Any]]) -> dict[str, 
         "frequency_smoothing_strength": float(candidate_rows[0]["frequency_smoothing_strength"]),
         "frequency_cutoff_ratio": float(candidate_rows[0]["frequency_cutoff_ratio"]),
         "frequency_decay": float(candidate_rows[0].get("frequency_decay", 0.35)),
+        "loss_focus_mode": str(candidate_rows[0].get("loss_focus_mode", "uniform")),
+        "loss_selected_node_weight": float(candidate_rows[0].get("loss_selected_node_weight", 1.15)),
+        "loss_tail_horizon_weight": float(candidate_rows[0].get("loss_tail_horizon_weight", 1.75)),
+        "loss_headroom_boost": float(candidate_rows[0].get("loss_headroom_boost", 0.4)),
         "poison_ratio": float(candidate_rows[0]["poison_ratio"]),
         "sigma_multiplier": float(candidate_rows[0]["sigma_multiplier"]),
         "target_shift_ratio": float(candidate_rows[0]["target_shift_ratio"]),
@@ -582,14 +583,15 @@ def build_family_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def main() -> None:
     args = parse_args()
     config = load_config(args.config)
+    thesis_contract = resolve_thesis_contract(config)
     dataset_name = str(config["dataset"].get("name", "dataset")).lower().replace("-", "_")
     run_dir = create_run_dir(config["output"]["root_dir"], f"{dataset_name}_cross")
 
     source_poison_dir = Path(args.source_poison_dir).resolve() if args.source_poison_dir else None
     if source_poison_dir is not None:
-        selected_candidates = select_candidates_from_source(source_poison_dir, config)
+        selected_candidates = select_candidates_from_source(source_poison_dir, config, thesis_contract)
         if not selected_candidates:
-            raise RuntimeError("No cross-dataset candidates matched the configured family filters.")
+            raise RuntimeError("No cross-dataset candidates passed the configured family filters and thesis replay gate.")
     elif args.best_attack_json:
         with Path(args.best_attack_json).resolve().open("r", encoding="utf-8") as handle:
             best_attack = json.load(handle)
@@ -604,7 +606,6 @@ def main() -> None:
 
     baseline_rows, baseline_summary, baseline_payload = run_frozen_baseline(config)
     baseline_metrics = baseline_payload["clean_metrics"]
-    max_clean_mae_delta_ratio = float(config.get("cross_validation", {}).get("max_clean_mae_delta_ratio", 0.05))
     attack_repeats = int(config.get("cross_validation", {}).get("attack_repeats", config["training"].get("repeats", 3)))
     base_seed = int(config.get("seed", 42))
 
@@ -626,6 +627,7 @@ def main() -> None:
         for repeat_idx in range(attack_repeats):
             row, payload = evaluate_attack_candidate(
                 config=config,
+                thesis_contract=thesis_contract,
                 baseline_payload=baseline_payload,
                 baseline_metrics=baseline_metrics,
                 candidate=candidate,
@@ -636,15 +638,16 @@ def main() -> None:
             candidate_rows.append(row)
             repeat_rows.append(row)
 
-            if candidate_best_row is None or row_sort_key(row, max_clean_mae_delta_ratio) > row_sort_key(candidate_best_row, max_clean_mae_delta_ratio):
+            if candidate_best_row is None or row_sort_key(row, thesis_contract) > row_sort_key(candidate_best_row, thesis_contract):
                 candidate_best_row = row
                 candidate_best_payload = payload
 
         summary = summarize_candidate_rows(candidate_rows)
+        summary.update(candidate_contract_flags(summary, thesis_contract))
         summary["candidate_rank"] = int(candidate_rank)
         summary_rows.append(summary)
 
-        if best_summary is None or row_sort_key(summary, max_clean_mae_delta_ratio) > row_sort_key(best_summary, max_clean_mae_delta_ratio):
+        if best_summary is None or row_sort_key(summary, thesis_contract) > row_sort_key(best_summary, thesis_contract):
             best_summary = summary
             best_payload = candidate_best_payload
 
@@ -652,7 +655,8 @@ def main() -> None:
         raise RuntimeError("Cross-dataset replay did not produce any valid summary rows.")
 
     family_summary = build_family_summary(summary_rows)
-    final_best = choose_best_row(summary_rows, max_clean_mae_delta_ratio)
+    final_best = choose_best_row(summary_rows, thesis_contract)
+    cross_contract_summary = evaluate_cross_result_standards(final_best, thesis_contract)
 
     save_table(repeat_rows, run_dir / "cross_candidate_repeats.csv")
     save_table(summary_rows, run_dir / "cross_candidate_summary.csv")
@@ -664,6 +668,8 @@ def main() -> None:
             "selected_candidate_count": len(selected_candidates),
             "family_summary": family_summary,
             "final_best": final_best,
+            "thesis_contract": thesis_contract,
+            "contract_summary": cross_contract_summary,
             "source_poison_dir": str(source_poison_dir) if source_poison_dir else None,
         },
         run_dir / "cross_dataset_summary.json",

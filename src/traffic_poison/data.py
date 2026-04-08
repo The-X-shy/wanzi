@@ -327,19 +327,29 @@ class TrafficSequenceDataset(Dataset):
         self,
         inputs: ArrayLike,
         targets: ArrayLike,
+        loss_weights: ArrayLike | None = None,
     ) -> None:
         x = _as_numpy(inputs).astype(np.float32, copy=False)
         y = _as_numpy(targets).astype(np.float32, copy=False)
         if x.shape[0] != y.shape[0]:
             raise ValueError("inputs and targets must have the same sample count.")
+        if loss_weights is not None:
+            w = _as_numpy(loss_weights).astype(np.float32, copy=False)
+            if y.shape != w.shape:
+                raise ValueError("loss_weights must match targets shape exactly.")
+            self.loss_weights = torch.from_numpy(w)
+        else:
+            self.loss_weights = None
         self.inputs = torch.from_numpy(x)
         self.targets = torch.from_numpy(y)
 
     def __len__(self) -> int:
         return self.inputs.shape[0]
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        return self.inputs[idx], self.targets[idx]
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, ...]:
+        if self.loss_weights is None:
+            return self.inputs[idx], self.targets[idx]
+        return self.inputs[idx], self.targets[idx], self.loss_weights[idx]
 
 
 @dataclass

@@ -849,6 +849,14 @@ def build_poisoned_training_set(
     frequency_smoothing_strength: float = 0.0,
     frequency_cutoff_ratio: float = 0.5,
     frequency_decay: float = 0.35,
+    headroom_floor: float = 0.0,
+    headroom_error_mix: float = 0.6,
+    global_shift_fraction: float = 0.3,
+    tail_focus_multiplier: float = 1.6,
+    loss_focus_mode: str = "uniform",
+    loss_selected_node_weight: float = 1.0,
+    loss_tail_horizon_weight: float = 1.0,
+    loss_headroom_boost: float = 0.0,
 ) -> Dict[str, Any]:
     """Build poisoned training inputs and shifted targets."""
 
@@ -890,6 +898,8 @@ def build_poisoned_training_set(
     local_forecast_error = np.zeros(n, dtype=np.float64)
     global_forecast_error = np.zeros(n, dtype=np.float64)
     local_error_ratio = np.zeros(n, dtype=np.float64)
+    positive_headroom = np.zeros(n, dtype=np.float64)
+    positive_headroom_ratio = np.zeros(n, dtype=np.float64)
     if clean_predictions is not None:
         clean_pred = _to_numpy(clean_predictions).astype(np.float64)
         clean_pred, _ = _ensure_3d(clean_pred)
@@ -907,6 +917,12 @@ def build_poisoned_training_set(
             local_forecast_error = np.mean(np.abs(local_pred - local_true), axis=(1, 2))
             global_forecast_error = np.mean(np.abs(clean_pred - targets), axis=(1, 2))
             local_error_ratio = local_forecast_error / np.maximum(global_forecast_error, 1e-8)
+            positive_headroom = np.mean(
+                np.maximum(local_pred - local_true - float(headroom_floor), 0.0),
+                axis=(1, 2),
+            )
+            local_target_scale = np.mean(np.abs(local_true), axis=(1, 2))
+            positive_headroom_ratio = positive_headroom / np.maximum(local_target_scale, 1e-8)
 
     if sample_selection_mode == "input_energy":
         sample_scores = input_energy_scores
@@ -915,6 +931,14 @@ def build_poisoned_training_set(
     elif sample_selection_mode == "hybrid_error_energy":
         if clean_predictions is not None:
             sample_scores = 0.7 * _minmax_normalize(local_error_ratio) + 0.3 * _minmax_normalize(input_energy_scores)
+        else:
+            sample_scores = input_energy_scores
+    elif sample_selection_mode == "directional_headroom":
+        sample_scores = positive_headroom_ratio if clean_predictions is not None else input_energy_scores
+    elif sample_selection_mode == "hybrid_headroom_error":
+        if clean_predictions is not None:
+            mix = float(np.clip(headroom_error_mix, 0.0, 1.0))
+            sample_scores = mix * _minmax_normalize(positive_headroom_ratio) + (1.0 - mix) * _minmax_normalize(local_error_ratio)
         else:
             sample_scores = input_energy_scores
     else:
@@ -936,10 +960,11 @@ def build_poisoned_training_set(
 
     poisoned_inputs = inputs.copy()
     poisoned_targets = targets.copy()
+    poisoned_loss_weights = np.ones_like(targets, dtype=np.float64)
 
     effective_shift = target_shift_ratio if abs(target_shift_ratio) > 1e-12 else fallback_shift_ratio
     applied_target_horizon_indices = selected_target_horizon_indices
-    if target_weight_mode == "ranked_decay":
+    if target_weight_mode in {"ranked_decay", "dual_focus"}:
         applied_target_horizon_indices = selection_tail_indices
     elif target_weight_mode != "flat":
         raise ValueError(f"Unknown target_weight_mode: {target_weight_mode}")
@@ -979,7 +1004,7 @@ def build_poisoned_training_set(
                 flat_horizon_weights = np.linspace(0.8, 1.0, max(1, applied_target_horizon_indices.size), dtype=np.float64)
                 for horizon_idx, horizon_weight in zip(applied_target_horizon_indices.tolist(), flat_horizon_weights.tolist()):
                     adjusted_target[horizon_idx, selected] *= max(0.0, 1.0 - abs(effective_shift) * float(horizon_weight))
-            else:
+            elif target_weight_mode == "ranked_decay":
                 for node_idx, node_weight in zip(selected.tolist(), resolved_node_weights.tolist()):
                     for horizon_idx, horizon_weight in zip(
                         applied_target_horizon_indices.tolist(),
@@ -987,7 +1012,30 @@ def build_poisoned_training_set(
                     ):
                         scale = max(0.0, 1.0 - abs(effective_shift) * float(node_weight) * float(horizon_weight))
                         adjusted_target[horizon_idx, node_idx] *= scale
+            else:
+                base_shift = abs(effective_shift) * float(np.clip(global_shift_fraction, 0.0, 1.0))
+                if base_shift > 0.0:
+                    adjusted_target[:, selected] *= max(0.0, 1.0 - base_shift)
+                focus_multiplier = max(float(tail_focus_multiplier), 0.0)
+                for node_idx, node_weight in zip(selected.tolist(), resolved_node_weights.tolist()):
+                    for horizon_idx, horizon_weight in zip(
+                        applied_target_horizon_indices.tolist(),
+                        resolved_horizon_weights.tolist(),
+                    ):
+                        extra_shift = abs(effective_shift) * focus_multiplier * float(node_weight) * float(horizon_weight)
+                        scale = max(0.0, 1.0 - extra_shift)
+                        adjusted_target[horizon_idx, node_idx] *= scale
             poisoned_targets[idx] = adjusted_target
+        if loss_focus_mode == "uniform":
+            continue
+        if loss_focus_mode != "directional_focus":
+            raise ValueError(f"Unknown loss_focus_mode: {loss_focus_mode}")
+        sample_weight = poisoned_loss_weights[idx]
+        sample_weight[:, selected] *= max(1.0, float(loss_selected_node_weight))
+        if selection_tail_indices.size > 0:
+            sample_headroom = float(max(positive_headroom_ratio[idx], 0.0))
+            headroom_scale = 1.0 + max(0.0, float(loss_headroom_boost)) * sample_headroom
+            sample_weight[selection_tail_indices[:, None], selected] *= max(1.0, float(loss_tail_horizon_weight)) * headroom_scale
 
     if squeezed:
         poisoned_inputs = poisoned_inputs[0]
@@ -996,14 +1044,19 @@ def build_poisoned_training_set(
         local_forecast_error_mean = float(np.mean(local_forecast_error[poisoned_indices]))
         global_forecast_error_mean = float(np.mean(global_forecast_error[poisoned_indices]))
         selected_poison_score_mean = float(np.mean(sample_scores[poisoned_indices]))
+        selected_headroom_mean = float(np.mean(positive_headroom[poisoned_indices]))
+        selected_headroom_score_mean = float(np.mean(positive_headroom_ratio[poisoned_indices]))
     else:
         local_forecast_error_mean = 0.0
         global_forecast_error_mean = 0.0
         selected_poison_score_mean = 0.0
+        selected_headroom_mean = 0.0
+        selected_headroom_score_mean = 0.0
 
     return {
         "poisoned_inputs": _to_tensor_like(poisoned_inputs, train_inputs),
         "poisoned_targets": _to_tensor_like(poisoned_targets, train_targets),
+        "poisoned_loss_weights": _to_tensor_like(poisoned_loss_weights, train_targets),
         "poisoned_indices": poisoned_indices.tolist(),
         "selected_nodes": selected.tolist(),
         "selected_time_indices": selected_time_indices.astype(int).tolist(),
@@ -1022,11 +1075,22 @@ def build_poisoned_training_set(
         "frequency_smoothing_strength": float(np.clip(frequency_smoothing_strength, 0.0, 1.0)),
         "frequency_cutoff_ratio": float(np.clip(frequency_cutoff_ratio, 0.05, 1.0)),
         "frequency_decay": float(max(frequency_decay, 1e-6)),
+        "headroom_floor": float(headroom_floor),
+        "headroom_error_mix": float(np.clip(headroom_error_mix, 0.0, 1.0)),
+        "global_shift_fraction": float(np.clip(global_shift_fraction, 0.0, 1.0)),
+        "tail_focus_multiplier": float(max(tail_focus_multiplier, 0.0)),
+        "loss_focus_mode": str(loss_focus_mode),
+        "loss_selected_node_weight": float(max(1.0, loss_selected_node_weight)),
+        "loss_tail_horizon_weight": float(max(1.0, loss_tail_horizon_weight)),
+        "loss_headroom_boost": float(max(0.0, loss_headroom_boost)),
         "node_rank_weights": resolved_node_weights.astype(np.float64).tolist(),
         "tail_horizon_weights": resolved_horizon_weights.astype(np.float64).tolist(),
         "local_forecast_error_mean": local_forecast_error_mean,
         "global_forecast_error_mean": global_forecast_error_mean,
         "selected_poison_score_mean": selected_poison_score_mean,
+        "positive_headroom_rate": float(np.mean(positive_headroom_ratio > 0.0)),
+        "selected_headroom_mean": selected_headroom_mean,
+        "selected_headroom_score_mean": selected_headroom_score_mean,
     }
 
 

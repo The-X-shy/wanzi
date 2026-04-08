@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader
 from .data import DataBundle, TrafficSequenceDataset, prepare_data_bundle
 from .metrics import compute_regression_metrics
 from .model import LSTMForecaster
+from .thesis_contract import choose_best_row, resolve_thesis_contract
 from .trainer import TrainArtifacts, evaluate_model, train_model
 from .utils import set_seed
 
@@ -66,10 +67,11 @@ def make_loader(
     inputs: np.ndarray,
     targets: np.ndarray,
     batch_size: int,
+    loss_weights: np.ndarray | None = None,
     shuffle: bool = False,
     num_workers: int = 0,
 ) -> DataLoader:
-    dataset = TrafficSequenceDataset(inputs, targets)
+    dataset = TrafficSequenceDataset(inputs, targets, loss_weights=loss_weights)
     return DataLoader(
         dataset,
         batch_size=batch_size,
@@ -119,24 +121,11 @@ def relative_metric_change(clean_metrics: dict[str, float], attacked_metrics: di
     return changes
 
 
-def pick_best_attack_row(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
-    if not rows:
-        return None
-
-    def score(row: dict[str, Any]) -> tuple[float, float, float]:
-        asr = float(row.get("attack_success_rate", 0.0))
-        clean_penalty = abs(
-            float(
-                row.get(
-                    "clean_MAE_delta_ratio",
-                    row.get("MAE_delta_ratio", row.get("clean_delta_ratio", 0.0)),
-                )
-            )
-        )
-        stealth_penalty = float(row.get("anomaly_rate", 0.0))
-        return (asr, -clean_penalty, -stealth_penalty)
-
-    return max(rows, key=score)
+def pick_best_attack_row(
+    rows: list[dict[str, Any]],
+    thesis_contract: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    return choose_best_row(rows, resolve_thesis_contract(thesis_contract))
 
 
 def build_model_from_kwargs(model_kwargs: dict[str, Any]) -> LSTMForecaster:

@@ -31,6 +31,23 @@ def _build_loss(name: str) -> nn.Module:
     return nn.L1Loss()
 
 
+def _compute_loss(
+    predictions: torch.Tensor,
+    targets: torch.Tensor,
+    loss_fn: nn.Module,
+    loss_weights: torch.Tensor | None = None,
+) -> torch.Tensor:
+    if loss_weights is None:
+        return loss_fn(predictions, targets)
+    if isinstance(loss_fn, nn.MSELoss):
+        elementwise = (predictions - targets) ** 2
+    else:
+        elementwise = torch.abs(predictions - targets)
+    weighted = elementwise * loss_weights
+    normalizer = torch.clamp(loss_weights.sum(), min=1e-8)
+    return weighted.sum() / normalizer
+
+
 def _run_epoch(
     model: nn.Module,
     loader: torch.utils.data.DataLoader,
@@ -43,7 +60,13 @@ def _run_epoch(
     model.train(training)
     losses: list[float] = []
 
-    for inputs, targets in loader:
+    for batch in loader:
+        if isinstance(batch, (tuple, list)) and len(batch) == 3:
+            inputs, targets, loss_weights = batch
+            loss_weights = loss_weights.to(device)
+        else:
+            inputs, targets = batch
+            loss_weights = None
         inputs = inputs.to(device)
         targets = targets.to(device)
 
@@ -51,7 +74,7 @@ def _run_epoch(
             optimizer.zero_grad(set_to_none=True)
 
         predictions = model(inputs)
-        loss = loss_fn(predictions, targets)
+        loss = _compute_loss(predictions, targets, loss_fn, loss_weights=loss_weights)
 
         if training:
             loss.backward()
@@ -138,7 +161,11 @@ def predict_model(
 
     targets: list[np.ndarray] = []
     predictions: list[np.ndarray] = []
-    for inputs, batch_targets in loader:
+    for batch in loader:
+        if isinstance(batch, (tuple, list)) and len(batch) == 3:
+            inputs, batch_targets, _ = batch
+        else:
+            inputs, batch_targets = batch
         inputs = inputs.to(resolved_device)
         batch_predictions = model(inputs).detach().cpu().numpy()
         predictions.append(batch_predictions)

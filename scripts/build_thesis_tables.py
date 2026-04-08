@@ -14,17 +14,14 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from traffic_poison.reporting import save_table
+from traffic_poison.thesis_contract import (
+    candidate_contract_flags,
+    evaluate_cross_result_standards,
+    evaluate_main_result_standards,
+    resolve_thesis_contract,
+    row_sort_key,
+)
 from traffic_poison.utils import create_run_dir, save_json
-
-
-PREVIOUS_MAINLINE_LOCAL_ASR = 0.056059718969555035
-MINIMUM_BASELINE_MAE = 0.37
-MINIMUM_BASELINE_SPREAD = 0.05
-MINIMUM_CLEAN_MAE_DELTA_RATIO = 0.05
-MINIMUM_MAIN_LOCAL_ASR = 0.05
-STRONG_MAIN_LOCAL_ASR = 0.06
-MINIMUM_LEGACY_ASR = 0.015
-MINIMUM_CROSS_LOCAL_ASR = 0.06
 
 
 def parse_args() -> argparse.Namespace:
@@ -61,6 +58,16 @@ def candidate_id(frame: pd.DataFrame) -> pd.Series:
         frame["frequency_cutoff_ratio"] if "frequency_cutoff_ratio" in frame.columns else pd.Series(0.5, index=frame.index)
     )
     frequency_decay = frame["frequency_decay"] if "frequency_decay" in frame.columns else pd.Series(0.35, index=frame.index)
+    loss_focus_mode = frame["loss_focus_mode"] if "loss_focus_mode" in frame.columns else pd.Series("uniform", index=frame.index)
+    loss_selected_node_weight = (
+        frame["loss_selected_node_weight"] if "loss_selected_node_weight" in frame.columns else pd.Series(1.15, index=frame.index)
+    )
+    loss_tail_horizon_weight = (
+        frame["loss_tail_horizon_weight"] if "loss_tail_horizon_weight" in frame.columns else pd.Series(1.75, index=frame.index)
+    )
+    loss_headroom_boost = (
+        frame["loss_headroom_boost"] if "loss_headroom_boost" in frame.columns else pd.Series(0.4, index=frame.index)
+    )
     return (
         frame["selection_strategy"].astype(str)
         + "|"
@@ -91,10 +98,30 @@ def candidate_id(frame: pd.DataFrame) -> pd.Series:
         + frequency_cutoff_ratio.astype(str)
         + "|"
         + frequency_decay.astype(str)
+        + "|"
+        + loss_focus_mode.astype(str)
+        + "|"
+        + loss_selected_node_weight.astype(str)
+        + "|"
+        + loss_tail_horizon_weight.astype(str)
+        + "|"
+        + loss_headroom_boost.astype(str)
     )
 
 
-def dedupe_candidates(frame: pd.DataFrame, max_clean_mae_delta_ratio: float = 0.05) -> pd.DataFrame:
+def annotate_and_sort_candidate_frame(frame: pd.DataFrame, thesis_contract: dict[str, Any]) -> pd.DataFrame:
+    if frame.empty:
+        return frame.copy()
+    rows: list[dict[str, Any]] = []
+    for row in frame.to_dict(orient="records"):
+        item = dict(row)
+        item.update(candidate_contract_flags(item, thesis_contract))
+        rows.append(item)
+    rows.sort(key=lambda row: row_sort_key(row, thesis_contract), reverse=True)
+    return pd.DataFrame(rows)
+
+
+def dedupe_candidates(frame: pd.DataFrame, thesis_contract: dict[str, Any]) -> pd.DataFrame:
     if frame.empty:
         return frame.copy()
 
@@ -112,25 +139,27 @@ def dedupe_candidates(frame: pd.DataFrame, max_clean_mae_delta_ratio: float = 0.
             "raw_global_target_shift_attainment": working.get("target_shift_attainment", 0.0),
             "sample_selection_mode": "input_energy",
             "target_weight_mode": "flat",
+            "positive_headroom_rate": 0.0,
+            "selected_headroom_mean": 0.0,
+            "selected_headroom_score_mean": 0.0,
+            "loss_focus_mode": "uniform",
+            "loss_selected_node_weight": 1.15,
+            "loss_tail_horizon_weight": 1.75,
+            "loss_headroom_boost": 0.4,
         },
     )
-    working["within_budget"] = (working["clean_MAE_delta_ratio"] <= max_clean_mae_delta_ratio).astype(int)
     working["candidate_id"] = candidate_id(working)
-    working = working.sort_values(
-        by=[
-            "within_budget",
-            "raw_selected_nodes_tail_horizon_attack_success_rate",
-            "raw_selected_nodes_attack_success_rate",
-            "attack_success_rate",
-            "clean_MAE_delta_ratio",
-            "raw_selected_nodes_tail_horizon_target_shift_attainment",
-            "frequency_energy_shift",
-            "mean_z_score",
-        ],
-        ascending=[False, False, False, False, True, False, True, True],
-    )
-    working = working.drop_duplicates(subset=["candidate_id"], keep="first")
-    return working.drop(columns=["candidate_id"])
+    working = annotate_and_sort_candidate_frame(working, thesis_contract)
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in working.to_dict(orient="records"):
+        key = str(row["candidate_id"])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+    deduped_frame = pd.DataFrame(deduped)
+    return deduped_frame.drop(columns=["candidate_id"])
 
 
 def ensure_columns(frame: pd.DataFrame, defaults: dict[str, Any]) -> pd.DataFrame:
@@ -171,13 +200,13 @@ def build_baseline_table(metr_baseline_dir: Path, cross_dir: Path | None) -> pd.
     return frame[[column for column in desired_columns if column in frame.columns]]
 
 
-def build_candidate_table(poison_dir: Path, max_clean_mae_delta_ratio: float = 0.05) -> pd.DataFrame:
+def build_candidate_table(poison_dir: Path, thesis_contract: dict[str, Any]) -> pd.DataFrame:
     recheck_path = poison_dir / "recheck_results.csv"
     if recheck_path.exists():
         frame = load_csv(recheck_path)
     else:
         frame = load_csv(poison_dir / "attack_results.csv")
-        frame = dedupe_candidates(frame, max_clean_mae_delta_ratio=max_clean_mae_delta_ratio)
+        frame = dedupe_candidates(frame, thesis_contract)
 
     frame = frame.copy()
     frame = ensure_columns(
@@ -205,22 +234,16 @@ def build_candidate_table(poison_dir: Path, max_clean_mae_delta_ratio: float = 0
             "frequency_decay": 0.35,
             "sample_selection_mode": "input_energy",
             "target_weight_mode": "flat",
+            "positive_headroom_rate": 0.0,
+            "selected_headroom_mean": 0.0,
+            "selected_headroom_score_mean": 0.0,
+            "loss_focus_mode": "uniform",
+            "loss_selected_node_weight": 1.15,
+            "loss_tail_horizon_weight": 1.75,
+            "loss_headroom_boost": 0.4,
         },
     )
-    frame["within_budget"] = frame["clean_MAE_delta_ratio"] <= max_clean_mae_delta_ratio
-    frame = frame.sort_values(
-        by=[
-            "within_budget",
-            "raw_selected_nodes_tail_horizon_attack_success_rate",
-            "raw_selected_nodes_attack_success_rate",
-            "attack_success_rate",
-            "clean_MAE_delta_ratio",
-            "raw_selected_nodes_tail_horizon_target_shift_attainment",
-            "frequency_energy_shift",
-            "mean_z_score",
-        ],
-        ascending=[False, False, False, False, True, False, True, True],
-    )
+    frame = annotate_and_sort_candidate_frame(frame, thesis_contract)
     desired_columns = [
         "candidate_rank",
         "selection_strategy",
@@ -237,6 +260,10 @@ def build_candidate_table(poison_dir: Path, max_clean_mae_delta_ratio: float = 0
         "target_shift_ratio",
         "sample_selection_mode",
         "target_weight_mode",
+        "loss_focus_mode",
+        "loss_selected_node_weight",
+        "loss_tail_horizon_weight",
+        "loss_headroom_boost",
         "attack_success_rate",
         "attack_success_rate_std",
         "raw_global_attack_success_rate",
@@ -259,14 +286,22 @@ def build_candidate_table(poison_dir: Path, max_clean_mae_delta_ratio: float = 0
         "local_forecast_error_mean",
         "global_forecast_error_mean",
         "selected_poison_score_mean",
+        "positive_headroom_rate",
+        "selected_headroom_mean",
+        "selected_headroom_score_mean",
         "selected_target_horizon_indices",
         "within_budget",
+        "direction_ok",
+        "strong_direction_ok",
+        "minimum_contract_pass",
+        "strong_contract_pass",
+        "eligible_for_cross_replay",
     ]
     return frame[[column for column in desired_columns if column in frame.columns]]
 
 
-def build_family_comparison(poison_dir: Path, max_clean_mae_delta_ratio: float = 0.05) -> pd.DataFrame:
-    frame = dedupe_candidates(load_csv(poison_dir / "attack_results.csv"), max_clean_mae_delta_ratio=max_clean_mae_delta_ratio)
+def build_family_comparison(poison_dir: Path, thesis_contract: dict[str, Any]) -> pd.DataFrame:
+    frame = dedupe_candidates(load_csv(poison_dir / "attack_results.csv"), thesis_contract)
     if frame.empty:
         return frame
     frame = ensure_columns(
@@ -288,7 +323,7 @@ def build_family_comparison(poison_dir: Path, max_clean_mae_delta_ratio: float =
             "target_weight_mode": "flat",
         },
     )
-    frame = frame[frame["clean_MAE_delta_ratio"] <= max_clean_mae_delta_ratio].copy()
+    frame = frame[frame["within_clean_budget"]].copy()
     grouped = (
         frame.groupby(["selection_strategy", "window_mode"], dropna=False)
         .agg(
@@ -316,9 +351,9 @@ def build_family_comparison(poison_dir: Path, max_clean_mae_delta_ratio: float =
 def build_single_axis_comparison(
     poison_dir: Path,
     group_key: str,
-    max_clean_mae_delta_ratio: float = 0.05,
+    thesis_contract: dict[str, Any],
 ) -> pd.DataFrame:
-    frame = dedupe_candidates(load_csv(poison_dir / "attack_results.csv"), max_clean_mae_delta_ratio=max_clean_mae_delta_ratio)
+    frame = dedupe_candidates(load_csv(poison_dir / "attack_results.csv"), thesis_contract)
     if frame.empty:
         return frame
     frame = ensure_columns(
@@ -336,9 +371,13 @@ def build_single_axis_comparison(
             "raw_selected_nodes_target_horizons_target_shift_attainment": 0.0,
             "raw_selected_nodes_target_shift_attainment": 0.0,
             "raw_global_target_shift_attainment": 0.0,
+            "selection_strategy": "unknown",
+            "window_mode": "unknown",
+            "target_horizon_mode": "all",
+            "frequency_smoothing_strength": 0.0,
         },
     )
-    frame = frame[frame["clean_MAE_delta_ratio"] <= max_clean_mae_delta_ratio].copy()
+    frame = frame[frame["within_clean_budget"]].copy()
     grouped = (
         frame.groupby([group_key], dropna=False)
         .agg(
@@ -363,8 +402,8 @@ def build_single_axis_comparison(
     return grouped
 
 
-def build_parameter_sensitivity(poison_dir: Path, max_clean_mae_delta_ratio: float = 0.05) -> pd.DataFrame:
-    frame = dedupe_candidates(load_csv(poison_dir / "attack_results.csv"), max_clean_mae_delta_ratio=max_clean_mae_delta_ratio)
+def build_parameter_sensitivity(poison_dir: Path, thesis_contract: dict[str, Any]) -> pd.DataFrame:
+    frame = dedupe_candidates(load_csv(poison_dir / "attack_results.csv"), thesis_contract)
     if frame.empty:
         return frame
     frame = ensure_columns(
@@ -390,17 +429,8 @@ def build_parameter_sensitivity(poison_dir: Path, max_clean_mae_delta_ratio: flo
             "target_weight_mode": "flat",
         },
     )
-    frame = frame[frame["clean_MAE_delta_ratio"] <= max_clean_mae_delta_ratio].copy()
-    frame = frame.sort_values(
-        by=[
-            "raw_selected_nodes_tail_horizon_attack_success_rate",
-            "raw_selected_nodes_attack_success_rate",
-            "attack_success_rate",
-            "clean_MAE_delta_ratio",
-            "raw_selected_nodes_tail_horizon_target_shift_attainment",
-        ],
-        ascending=[False, False, False, True, False],
-    )
+    frame = frame[frame["within_clean_budget"]].copy()
+    frame = annotate_and_sort_candidate_frame(frame, thesis_contract)
     desired_columns = [
         "selection_strategy",
         "window_mode",
@@ -457,18 +487,22 @@ def build_summary_payload(
     candidate_table: pd.DataFrame,
     strategy_table: pd.DataFrame,
     window_table: pd.DataFrame,
+    thesis_contract: dict[str, Any],
 ) -> dict[str, Any]:
     search_summary = load_json(poison_dir / "search_summary.json")
     final_best = search_summary.get("final_best", {})
-    final_best_asr = float(final_best.get("attack_success_rate", 0.0))
-    final_best_single = float(final_best.get("selected_repeat_attack_success_rate", 0.0))
-    final_best_local_asr = float(final_best.get("raw_selected_nodes_tail_horizon_attack_success_rate", 0.0))
-    final_best_clean_delta = float(final_best.get("clean_MAE_delta_ratio", 1.0))
     baseline_best_mae = float(baseline_table.iloc[0]["best_MAE"]) if not baseline_table.empty else float("inf")
     baseline_spread = float(baseline_table.iloc[0]["mae_relative_spread"]) if not baseline_table.empty else float("inf")
+    standards = evaluate_main_result_standards(final_best, baseline_best_mae, baseline_spread, thesis_contract)
+    paper_safe_best = None
+    if not candidate_table.empty and "minimum_contract_pass" in candidate_table.columns:
+        paper_safe_rows = candidate_table[candidate_table["minimum_contract_pass"] == True]  # noqa: E712
+        if not paper_safe_rows.empty:
+            paper_safe_best = paper_safe_rows.iloc[0].to_dict()
 
     summary: dict[str, Any] = {
         "metr_final_best": final_best,
+        "paper_safe_best": paper_safe_best,
         "strategy_leader": strategy_table.iloc[0].to_dict() if not strategy_table.empty else None,
         "window_mean_leader": window_table.iloc[0].to_dict() if not window_table.empty else None,
         "window_peak_leader": (
@@ -476,20 +510,8 @@ def build_summary_payload(
             if not window_table.empty
             else None
         ),
-        "minimum_bar_met": (
-            baseline_best_mae <= MINIMUM_BASELINE_MAE
-            and baseline_spread <= MINIMUM_BASELINE_SPREAD
-            and final_best_clean_delta <= MINIMUM_CLEAN_MAE_DELTA_RATIO
-            and final_best_local_asr >= MINIMUM_MAIN_LOCAL_ASR
-            and final_best_asr >= MINIMUM_LEGACY_ASR
-        ),
-        "strong_bar_met": (
-            final_best_clean_delta <= 0.04
-            and final_best_local_asr >= STRONG_MAIN_LOCAL_ASR
-        ),
-        "beat_previous_local_mainline": final_best_local_asr > PREVIOUS_MAINLINE_LOCAL_ASR,
-        "stop_rule_triggered": final_best_local_asr <= PREVIOUS_MAINLINE_LOCAL_ASR and final_best_clean_delta >= MINIMUM_CLEAN_MAE_DELTA_RATIO,
-        "follow_up_search_recommended": final_best_local_asr >= STRONG_MAIN_LOCAL_ASR or final_best_single >= 0.02,
+        **standards,
+        "thesis_contract": thesis_contract,
         "candidate_count_in_paper_table": int(len(candidate_table)),
     }
 
@@ -497,10 +519,7 @@ def build_summary_payload(
         cross_summary = load_json(cross_dir / "cross_dataset_summary.json")
         summary["cross_dataset_summary"] = cross_summary
         cross_best = dict(cross_summary.get("final_best", {}))
-        summary["cross_minimum_bar_met"] = (
-            float(cross_best.get("raw_selected_nodes_tail_horizon_attack_success_rate", 0.0)) >= MINIMUM_CROSS_LOCAL_ASR
-            and float(cross_best.get("clean_MAE_delta_ratio", 1.0)) <= MINIMUM_CLEAN_MAE_DELTA_RATIO
-        )
+        summary.update(evaluate_cross_result_standards(cross_best, thesis_contract))
     return summary
 
 
@@ -523,6 +542,11 @@ def build_markdown_summary(
         top_row = candidate_table.iloc[0].to_dict()
         lines.append(
             f"- Main poisoned result: `{top_row.get('selection_strategy')}` + `{top_row.get('window_mode')}` gives legacy mean ASR `{top_row.get('attack_success_rate', 0):.2%}`, local raw-space ASR `{top_row.get('raw_selected_nodes_tail_horizon_attack_success_rate', 0):.2%}`, and clean MAE drift `{top_row.get('clean_MAE_delta_ratio', 0):.2%}`."
+        )
+    paper_safe_best = summary_payload.get("paper_safe_best")
+    if paper_safe_best:
+        lines.append(
+            f"- Best paper-safe candidate: `{paper_safe_best.get('sample_selection_mode')}` + `{paper_safe_best.get('target_weight_mode')}` + `{paper_safe_best.get('loss_focus_mode')}` gives legacy mean ASR `{float(paper_safe_best.get('attack_success_rate', 0.0)):.2%}`, local raw-space ASR `{float(paper_safe_best.get('raw_selected_nodes_tail_horizon_attack_success_rate', 0.0)):.2%}`, clean MAE drift `{float(paper_safe_best.get('clean_MAE_delta_ratio', 0.0)):.2%}`, and local target attainment `{float(paper_safe_best.get('raw_selected_nodes_tail_horizon_target_shift_attainment', 0.0)):.4f}`."
         )
     if not strategy_table.empty:
         lines.append(
@@ -552,7 +576,7 @@ def build_markdown_summary(
         f"- Minimum paper bar: `{'met' if summary_payload.get('minimum_bar_met') else 'not met'}`; strong paper bar: `{'met' if summary_payload.get('strong_bar_met') else 'not met'}`."
     )
     lines.append(
-        f"- Previous mainline local-ASR bar (`{PREVIOUS_MAINLINE_LOCAL_ASR:.2%}`): `{'beaten' if summary_payload.get('beat_previous_local_mainline') else 'not beaten'}`."
+        f"- Previous mainline local-ASR bar (`{float(summary_payload.get('thesis_contract', {}).get('previous_mainline_local_asr', 0.0)):.2%}`): `{'beaten' if summary_payload.get('beat_previous_local_mainline') else 'not beaten'}`."
     )
     lines.append(
         f"- Stop rule: `{'triggered' if summary_payload.get('stop_rule_triggered') else 'not triggered'}`; extra follow-up search recommendation: `{'yes' if summary_payload.get('follow_up_search_recommended') else 'no'}`."
@@ -563,6 +587,7 @@ def build_markdown_summary(
 
 def main() -> None:
     args = parse_args()
+    thesis_contract = resolve_thesis_contract()
     metr_baseline_dir = Path(args.metr_baseline_dir).resolve()
     metr_poison_dir = Path(args.metr_poison_dir).resolve()
     defense_dir = Path(args.defense_dir).resolve()
@@ -572,13 +597,16 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     baseline_table = build_baseline_table(metr_baseline_dir, cross_dir)
-    candidate_table = build_candidate_table(metr_poison_dir)
-    family_table = build_family_comparison(metr_poison_dir)
-    strategy_table = build_single_axis_comparison(metr_poison_dir, "selection_strategy")
-    window_table = build_single_axis_comparison(metr_poison_dir, "window_mode")
-    target_horizon_table = build_single_axis_comparison(metr_poison_dir, "target_horizon_mode")
-    smoothing_table = build_single_axis_comparison(metr_poison_dir, "frequency_smoothing_strength")
-    parameter_table = build_parameter_sensitivity(metr_poison_dir)
+    search_summary_path = metr_poison_dir / "search_summary.json"
+    if search_summary_path.exists():
+        thesis_contract = resolve_thesis_contract(load_json(search_summary_path).get("thesis_contract", thesis_contract))
+    candidate_table = build_candidate_table(metr_poison_dir, thesis_contract)
+    family_table = build_family_comparison(metr_poison_dir, thesis_contract)
+    strategy_table = build_single_axis_comparison(metr_poison_dir, "selection_strategy", thesis_contract)
+    window_table = build_single_axis_comparison(metr_poison_dir, "window_mode", thesis_contract)
+    target_horizon_table = build_single_axis_comparison(metr_poison_dir, "target_horizon_mode", thesis_contract)
+    smoothing_table = build_single_axis_comparison(metr_poison_dir, "frequency_smoothing_strength", thesis_contract)
+    parameter_table = build_parameter_sensitivity(metr_poison_dir, thesis_contract)
     defense_table = build_defense_table(defense_dir)
 
     save_table(baseline_table.to_dict(orient="records"), output_dir / "baseline_stability_table.csv")
@@ -599,7 +627,15 @@ def main() -> None:
             cross_family_table = load_csv(cross_dir / "cross_family_summary.csv")
             save_table(cross_family_table.to_dict(orient="records"), output_dir / "cross_family_summary.csv")
 
-    summary_payload = build_summary_payload(baseline_table, metr_poison_dir, cross_dir, candidate_table, strategy_table, window_table)
+    summary_payload = build_summary_payload(
+        baseline_table,
+        metr_poison_dir,
+        cross_dir,
+        candidate_table,
+        strategy_table,
+        window_table,
+        thesis_contract,
+    )
     save_json(summary_payload, output_dir / "thesis_summary.json")
     (output_dir / "thesis_summary.md").write_text(
         build_markdown_summary(baseline_table, candidate_table, strategy_table, window_table, defense_table, cross_dir, summary_payload),
