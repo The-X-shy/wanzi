@@ -170,10 +170,67 @@ def passes_candidate_contract(row: Mapping[str, Any] | None, thesis_contract: Ma
     return within_clean_budget(row, thesis_contract) and direction_ok(row, thesis_contract)
 
 
-def score_candidate(row: Mapping[str, Any], thesis_contract: Mapping[str, Any]) -> tuple[float, ...]:
+def _shortfall(actual: float, minimum: float) -> float:
+    return max(0.0, minimum - actual)
+
+
+def _overflow(actual: float, maximum: float) -> float:
+    return max(0.0, actual - maximum)
+
+
+def legacy_asr_gap_to_minimum(row: Mapping[str, Any], thesis_contract: Mapping[str, Any]) -> float:
+    return _shortfall(legacy_asr(row, thesis_contract), _as_float(thesis_contract.get("minimum_legacy_asr"), 0.015))
+
+
+def main_local_asr_gap_to_minimum(row: Mapping[str, Any], thesis_contract: Mapping[str, Any]) -> float:
+    return _shortfall(main_local_asr(row, thesis_contract), _as_float(thesis_contract.get("minimum_main_local_asr"), 0.05))
+
+
+def shift_direction_gap_to_minimum(row: Mapping[str, Any], thesis_contract: Mapping[str, Any]) -> float:
+    return _shortfall(
+        shift_direction_match_rate(row, thesis_contract),
+        _as_float(thesis_contract.get("minimum_shift_direction_match_rate"), 0.60),
+    )
+
+
+def clean_budget_overflow(row: Mapping[str, Any], thesis_contract: Mapping[str, Any]) -> float:
+    return _overflow(clean_mae_delta_ratio(row), _as_float(thesis_contract.get("clean_mae_delta_ratio_max"), 0.05))
+
+
+def stealth_overflow(row: Mapping[str, Any], thesis_contract: Mapping[str, Any]) -> float:
+    frequency_gap = _overflow(
+        frequency_energy_shift(row, thesis_contract),
+        _as_float(thesis_contract.get("maximum_frequency_energy_shift"), 0.05),
+    )
+    z_gap = _overflow(mean_z_score(row, thesis_contract), _as_float(thesis_contract.get("maximum_mean_z_score"), 0.80))
+    return max(frequency_gap, z_gap)
+
+
+def passes_minimum_candidate_bar(row: Mapping[str, Any] | None, thesis_contract: Mapping[str, Any]) -> bool:
+    return passes_main_result_minimum_bar(row, None, None, thesis_contract)
+
+
+def passes_strong_candidate_bar(row: Mapping[str, Any] | None, thesis_contract: Mapping[str, Any]) -> bool:
+    return passes_main_result_strong_bar(row, None, None, thesis_contract)
+
+
+def raw_score_candidate(row: Mapping[str, Any], thesis_contract: Mapping[str, Any]) -> tuple[float, ...]:
     return (
+        main_local_asr(row, thesis_contract),
+        target_shift_attainment(row, thesis_contract),
+        legacy_asr(row, thesis_contract),
         1.0 if within_clean_budget(row, thesis_contract) else 0.0,
         1.0 if direction_ok(row, thesis_contract) else 0.0,
+        -frequency_energy_shift(row, thesis_contract),
+        -abs(clean_mae_delta_ratio(row)),
+        secondary_local_asr(row, thesis_contract),
+        -mean_z_score(row, thesis_contract),
+        -anomaly_rate(row),
+    )
+
+
+def _paper_pass_score(row: Mapping[str, Any], thesis_contract: Mapping[str, Any]) -> tuple[float, ...]:
+    return (
         main_local_asr(row, thesis_contract),
         target_shift_attainment(row, thesis_contract),
         -frequency_energy_shift(row, thesis_contract),
@@ -185,14 +242,60 @@ def score_candidate(row: Mapping[str, Any], thesis_contract: Mapping[str, Any]) 
     )
 
 
+def _paper_gap_score(row: Mapping[str, Any], thesis_contract: Mapping[str, Any]) -> tuple[float, ...]:
+    return (
+        -legacy_asr_gap_to_minimum(row, thesis_contract),
+        -main_local_asr_gap_to_minimum(row, thesis_contract),
+        -shift_direction_gap_to_minimum(row, thesis_contract),
+        -clean_budget_overflow(row, thesis_contract),
+        -stealth_overflow(row, thesis_contract),
+        main_local_asr(row, thesis_contract),
+        target_shift_attainment(row, thesis_contract),
+        legacy_asr(row, thesis_contract),
+        -frequency_energy_shift(row, thesis_contract),
+        -abs(clean_mae_delta_ratio(row)),
+        secondary_local_asr(row, thesis_contract),
+        -mean_z_score(row, thesis_contract),
+        -anomaly_rate(row),
+    )
+
+
+def paper_score_candidate(row: Mapping[str, Any], thesis_contract: Mapping[str, Any]) -> tuple[float, ...]:
+    minimum_pass = passes_minimum_candidate_bar(row, thesis_contract)
+    return (
+        1.0 if within_clean_budget(row, thesis_contract) else 0.0,
+        1.0 if direction_ok(row, thesis_contract) else 0.0,
+        1.0 if minimum_pass else 0.0,
+        *(_paper_pass_score(row, thesis_contract) if minimum_pass else _paper_gap_score(row, thesis_contract)),
+    )
+
+
+def score_candidate(row: Mapping[str, Any], thesis_contract: Mapping[str, Any]) -> tuple[float, ...]:
+    return paper_score_candidate(row, thesis_contract)
+
+
 def row_sort_key(row: Mapping[str, Any], thesis_contract: Mapping[str, Any]) -> tuple[float, ...]:
-    return score_candidate(row, thesis_contract)
+    return paper_score_candidate(row, thesis_contract)
+
+
+def raw_row_sort_key(row: Mapping[str, Any], thesis_contract: Mapping[str, Any]) -> tuple[float, ...]:
+    return raw_score_candidate(row, thesis_contract)
 
 
 def choose_best_row(rows: list[dict[str, Any]], thesis_contract: Mapping[str, Any]) -> dict[str, Any] | None:
     if not rows:
         return None
     return max(rows, key=lambda row: row_sort_key(row, thesis_contract))
+
+
+def choose_best_paper_row(rows: list[dict[str, Any]], thesis_contract: Mapping[str, Any]) -> dict[str, Any] | None:
+    return choose_best_row(rows, thesis_contract)
+
+
+def choose_best_raw_row(rows: list[dict[str, Any]], thesis_contract: Mapping[str, Any]) -> dict[str, Any] | None:
+    if not rows:
+        return None
+    return max(rows, key=lambda row: raw_row_sort_key(row, thesis_contract))
 
 
 def candidate_contract_flags(row: Mapping[str, Any], thesis_contract: Mapping[str, Any]) -> dict[str, Any]:
@@ -202,9 +305,14 @@ def candidate_contract_flags(row: Mapping[str, Any], thesis_contract: Mapping[st
         "within_budget": within_budget,
         "direction_ok": direction_ok(row, thesis_contract),
         "strong_direction_ok": strong_direction_ok(row, thesis_contract),
-        "minimum_contract_pass": passes_main_result_minimum_bar(row, None, None, thesis_contract),
-        "strong_contract_pass": passes_main_result_strong_bar(row, None, None, thesis_contract),
+        "minimum_contract_pass": passes_minimum_candidate_bar(row, thesis_contract),
+        "strong_contract_pass": passes_strong_candidate_bar(row, thesis_contract),
         "eligible_for_cross_replay": eligible_for_cross_replay(row, thesis_contract),
+        "legacy_asr_gap_to_minimum": legacy_asr_gap_to_minimum(row, thesis_contract),
+        "main_local_asr_gap_to_minimum": main_local_asr_gap_to_minimum(row, thesis_contract),
+        "shift_direction_gap_to_minimum": shift_direction_gap_to_minimum(row, thesis_contract),
+        "clean_budget_overflow": clean_budget_overflow(row, thesis_contract),
+        "stealth_overflow": stealth_overflow(row, thesis_contract),
     }
 
 

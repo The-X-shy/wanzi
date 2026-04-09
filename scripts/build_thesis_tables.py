@@ -58,6 +58,9 @@ def candidate_id(frame: pd.DataFrame) -> pd.Series:
         frame["frequency_cutoff_ratio"] if "frequency_cutoff_ratio" in frame.columns else pd.Series(0.5, index=frame.index)
     )
     frequency_decay = frame["frequency_decay"] if "frequency_decay" in frame.columns else pd.Series(0.35, index=frame.index)
+    headroom_error_mix = frame["headroom_error_mix"] if "headroom_error_mix" in frame.columns else pd.Series(0.6, index=frame.index)
+    global_shift_fraction = frame["global_shift_fraction"] if "global_shift_fraction" in frame.columns else pd.Series(0.3, index=frame.index)
+    tail_focus_multiplier = frame["tail_focus_multiplier"] if "tail_focus_multiplier" in frame.columns else pd.Series(1.6, index=frame.index)
     loss_focus_mode = frame["loss_focus_mode"] if "loss_focus_mode" in frame.columns else pd.Series("uniform", index=frame.index)
     loss_selected_node_weight = (
         frame["loss_selected_node_weight"] if "loss_selected_node_weight" in frame.columns else pd.Series(1.15, index=frame.index)
@@ -99,6 +102,12 @@ def candidate_id(frame: pd.DataFrame) -> pd.Series:
         + "|"
         + frequency_decay.astype(str)
         + "|"
+        + headroom_error_mix.astype(str)
+        + "|"
+        + global_shift_fraction.astype(str)
+        + "|"
+        + tail_focus_multiplier.astype(str)
+        + "|"
         + loss_focus_mode.astype(str)
         + "|"
         + loss_selected_node_weight.astype(str)
@@ -139,6 +148,9 @@ def dedupe_candidates(frame: pd.DataFrame, thesis_contract: dict[str, Any]) -> p
             "raw_global_target_shift_attainment": working.get("target_shift_attainment", 0.0),
             "sample_selection_mode": "input_energy",
             "target_weight_mode": "flat",
+            "headroom_error_mix": 0.6,
+            "global_shift_fraction": 0.3,
+            "tail_focus_multiplier": 1.6,
             "positive_headroom_rate": 0.0,
             "selected_headroom_mean": 0.0,
             "selected_headroom_score_mean": 0.0,
@@ -234,6 +246,9 @@ def build_candidate_table(poison_dir: Path, thesis_contract: dict[str, Any]) -> 
             "frequency_decay": 0.35,
             "sample_selection_mode": "input_energy",
             "target_weight_mode": "flat",
+            "headroom_error_mix": 0.6,
+            "global_shift_fraction": 0.3,
+            "tail_focus_multiplier": 1.6,
             "positive_headroom_rate": 0.0,
             "selected_headroom_mean": 0.0,
             "selected_headroom_score_mean": 0.0,
@@ -260,6 +275,9 @@ def build_candidate_table(poison_dir: Path, thesis_contract: dict[str, Any]) -> 
         "target_shift_ratio",
         "sample_selection_mode",
         "target_weight_mode",
+        "headroom_error_mix",
+        "global_shift_fraction",
+        "tail_focus_multiplier",
         "loss_focus_mode",
         "loss_selected_node_weight",
         "loss_tail_horizon_weight",
@@ -321,6 +339,9 @@ def build_family_comparison(poison_dir: Path, thesis_contract: dict[str, Any]) -
             "raw_global_target_shift_attainment": 0.0,
             "sample_selection_mode": "input_energy",
             "target_weight_mode": "flat",
+            "headroom_error_mix": 0.6,
+            "global_shift_fraction": 0.3,
+            "tail_focus_multiplier": 1.6,
         },
     )
     frame = frame[frame["within_clean_budget"]].copy()
@@ -375,6 +396,9 @@ def build_single_axis_comparison(
             "window_mode": "unknown",
             "target_horizon_mode": "all",
             "frequency_smoothing_strength": 0.0,
+            "headroom_error_mix": 0.6,
+            "global_shift_fraction": 0.3,
+            "tail_focus_multiplier": 1.6,
         },
     )
     frame = frame[frame["within_clean_budget"]].copy()
@@ -427,6 +451,9 @@ def build_parameter_sensitivity(poison_dir: Path, thesis_contract: dict[str, Any
             "frequency_cutoff_ratio": 0.5,
             "sample_selection_mode": "input_energy",
             "target_weight_mode": "flat",
+            "headroom_error_mix": 0.6,
+            "global_shift_fraction": 0.3,
+            "tail_focus_multiplier": 1.6,
         },
     )
     frame = frame[frame["within_clean_budget"]].copy()
@@ -490,10 +517,12 @@ def build_summary_payload(
     thesis_contract: dict[str, Any],
 ) -> dict[str, Any]:
     search_summary = load_json(poison_dir / "search_summary.json")
-    final_best = search_summary.get("final_best", {})
+    final_best = search_summary.get("final_best_paper", search_summary.get("final_best", {}))
+    raw_best = search_summary.get("final_best_raw", {})
     baseline_best_mae = float(baseline_table.iloc[0]["best_MAE"]) if not baseline_table.empty else float("inf")
     baseline_spread = float(baseline_table.iloc[0]["mae_relative_spread"]) if not baseline_table.empty else float("inf")
     standards = evaluate_main_result_standards(final_best, baseline_best_mae, baseline_spread, thesis_contract)
+    raw_standards = evaluate_main_result_standards(raw_best, baseline_best_mae, baseline_spread, thesis_contract) if raw_best else None
     paper_safe_best = None
     if not candidate_table.empty and "minimum_contract_pass" in candidate_table.columns:
         paper_safe_rows = candidate_table[candidate_table["minimum_contract_pass"] == True]  # noqa: E712
@@ -502,7 +531,10 @@ def build_summary_payload(
 
     summary: dict[str, Any] = {
         "metr_final_best": final_best,
+        "metr_final_best_paper": final_best,
+        "metr_final_best_raw": raw_best,
         "paper_safe_best": paper_safe_best,
+        "paper_and_raw_same_candidate": bool(search_summary.get("paper_and_raw_same_candidate", False)),
         "strategy_leader": strategy_table.iloc[0].to_dict() if not strategy_table.empty else None,
         "window_mean_leader": window_table.iloc[0].to_dict() if not window_table.empty else None,
         "window_peak_leader": (
@@ -511,6 +543,7 @@ def build_summary_payload(
             else None
         ),
         **standards,
+        "raw_contract_summary": raw_standards,
         "thesis_contract": thesis_contract,
         "candidate_count_in_paper_table": int(len(candidate_table)),
     }
@@ -538,16 +571,18 @@ def build_markdown_summary(
         lines.append(
             f"- METR-LA frozen baseline: best MAE `{metr_row.get('best_MAE', 0):.4f}`, spread `{metr_row.get('mae_relative_spread', 0):.2%}`."
         )
-    if not candidate_table.empty:
-        top_row = candidate_table.iloc[0].to_dict()
+    raw_best = summary_payload.get("metr_final_best_raw") or {}
+    paper_best = summary_payload.get("metr_final_best_paper") or {}
+    if raw_best:
         lines.append(
-            f"- Main poisoned result: `{top_row.get('selection_strategy')}` + `{top_row.get('window_mode')}` gives legacy mean ASR `{top_row.get('attack_success_rate', 0):.2%}`, local raw-space ASR `{top_row.get('raw_selected_nodes_tail_horizon_attack_success_rate', 0):.2%}`, and clean MAE drift `{top_row.get('clean_MAE_delta_ratio', 0):.2%}`."
+            f"- Raw champion: `{raw_best.get('sample_selection_mode')}` + `{raw_best.get('target_weight_mode')}` + `{raw_best.get('loss_focus_mode')}` gives legacy mean ASR `{float(raw_best.get('attack_success_rate', 0.0)):.2%}`, local raw-space ASR `{float(raw_best.get('raw_selected_nodes_tail_horizon_attack_success_rate', 0.0)):.2%}`, clean MAE drift `{float(raw_best.get('clean_MAE_delta_ratio', 0.0)):.2%}`, and local target attainment `{float(raw_best.get('raw_selected_nodes_tail_horizon_target_shift_attainment', 0.0)):.4f}`."
         )
-    paper_safe_best = summary_payload.get("paper_safe_best")
-    if paper_safe_best:
+    if paper_best:
         lines.append(
-            f"- Best paper-safe candidate: `{paper_safe_best.get('sample_selection_mode')}` + `{paper_safe_best.get('target_weight_mode')}` + `{paper_safe_best.get('loss_focus_mode')}` gives legacy mean ASR `{float(paper_safe_best.get('attack_success_rate', 0.0)):.2%}`, local raw-space ASR `{float(paper_safe_best.get('raw_selected_nodes_tail_horizon_attack_success_rate', 0.0)):.2%}`, clean MAE drift `{float(paper_safe_best.get('clean_MAE_delta_ratio', 0.0)):.2%}`, and local target attainment `{float(paper_safe_best.get('raw_selected_nodes_tail_horizon_target_shift_attainment', 0.0)):.4f}`."
+            f"- Paper champion: `{paper_best.get('sample_selection_mode')}` + `{paper_best.get('target_weight_mode')}` + `{paper_best.get('loss_focus_mode')}` gives legacy mean ASR `{float(paper_best.get('attack_success_rate', 0.0)):.2%}`, local raw-space ASR `{float(paper_best.get('raw_selected_nodes_tail_horizon_attack_success_rate', 0.0)):.2%}`, clean MAE drift `{float(paper_best.get('clean_MAE_delta_ratio', 0.0)):.2%}`, and local target attainment `{float(paper_best.get('raw_selected_nodes_tail_horizon_target_shift_attainment', 0.0)):.4f}`."
         )
+    if summary_payload.get("paper_and_raw_same_candidate"):
+        lines.append("- Raw champion and paper champion are the same candidate.")
     if not strategy_table.empty:
         lines.append(
             f"- Strategy comparison: `{strategy_table.iloc[0]['selection_strategy']}` has the highest mean local ASR `{strategy_table.iloc[0]['mean_local_attack_success_rate']:.2%}`."

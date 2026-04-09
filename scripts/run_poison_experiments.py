@@ -38,8 +38,10 @@ from traffic_poison.poisoning import (
 from traffic_poison.reporting import plot_prediction_case, plot_trigger_case, save_table
 from traffic_poison.thesis_contract import (
     candidate_contract_flags,
+    choose_best_raw_row,
     choose_best_row,
     evaluate_main_result_standards,
+    raw_row_sort_key,
     resolve_thesis_contract,
     row_sort_key,
 )
@@ -81,6 +83,9 @@ def candidate_from_row(row: dict[str, Any]) -> dict[str, Any]:
         "frequency_smoothing_strength": float(row.get("frequency_smoothing_strength", 0.0)),
         "frequency_cutoff_ratio": float(row.get("frequency_cutoff_ratio", 0.5)),
         "frequency_decay": float(row.get("frequency_decay", 0.35)),
+        "headroom_error_mix": float(row.get("headroom_error_mix", 0.6)),
+        "global_shift_fraction": float(row.get("global_shift_fraction", 0.3)),
+        "tail_focus_multiplier": float(row.get("tail_focus_multiplier", 1.6)),
         "loss_focus_mode": str(row.get("loss_focus_mode", "uniform")),
         "loss_selected_node_weight": float(row.get("loss_selected_node_weight", 1.15)),
         "loss_tail_horizon_weight": float(row.get("loss_tail_horizon_weight", 1.75)),
@@ -139,6 +144,24 @@ def normalize_candidate(candidate: dict[str, Any], poison_cfg: dict[str, Any]) -
                 poison_cfg.get("frequency_decays", [poison_cfg.get("frequency_decay", 0.35)])[0],
             )
         ),
+        "headroom_error_mix": float(
+            candidate.get(
+                "headroom_error_mix",
+                poison_cfg.get("headroom_error_mixes", [poison_cfg.get("headroom_error_mix", 0.6)])[0],
+            )
+        ),
+        "global_shift_fraction": float(
+            candidate.get(
+                "global_shift_fraction",
+                poison_cfg.get("global_shift_fractions", [poison_cfg.get("global_shift_fraction", 0.3)])[0],
+            )
+        ),
+        "tail_focus_multiplier": float(
+            candidate.get(
+                "tail_focus_multiplier",
+                poison_cfg.get("tail_focus_multipliers", [poison_cfg.get("tail_focus_multiplier", 1.6)])[0],
+            )
+        ),
         "loss_focus_mode": str(
             candidate.get(
                 "loss_focus_mode",
@@ -183,6 +206,9 @@ def candidate_key(candidate: dict[str, Any]) -> str:
         "frequency_smoothing_strength": round(float(candidate["frequency_smoothing_strength"]), 8),
         "frequency_cutoff_ratio": round(float(candidate["frequency_cutoff_ratio"]), 8),
         "frequency_decay": round(float(candidate.get("frequency_decay", 0.35)), 8),
+        "headroom_error_mix": round(float(candidate.get("headroom_error_mix", 0.6)), 8),
+        "global_shift_fraction": round(float(candidate.get("global_shift_fraction", 0.3)), 8),
+        "tail_focus_multiplier": round(float(candidate.get("tail_focus_multiplier", 1.6)), 8),
         "loss_focus_mode": str(candidate.get("loss_focus_mode", "uniform")),
         "loss_selected_node_weight": round(float(candidate.get("loss_selected_node_weight", 1.15)), 8),
         "loss_tail_horizon_weight": round(float(candidate.get("loss_tail_horizon_weight", 1.75)), 8),
@@ -229,6 +255,9 @@ def build_search_stages(poison_cfg: dict[str, Any]) -> list[dict[str, Any]]:
             ),
             "frequency_cutoff_ratios": poison_cfg.get("frequency_cutoff_ratios", [poison_cfg.get("frequency_cutoff_ratio", 0.5)]),
             "frequency_decays": poison_cfg.get("frequency_decays", [poison_cfg.get("frequency_decay", 0.35)]),
+            "headroom_error_mixes": poison_cfg.get("headroom_error_mixes", [poison_cfg.get("headroom_error_mix", 0.6)]),
+            "global_shift_fractions": poison_cfg.get("global_shift_fractions", [poison_cfg.get("global_shift_fraction", 0.3)]),
+            "tail_focus_multipliers": poison_cfg.get("tail_focus_multipliers", [poison_cfg.get("tail_focus_multiplier", 1.6)]),
             "loss_focus_modes": poison_cfg.get("loss_focus_modes", [poison_cfg.get("loss_focus_mode", "uniform")]),
             "loss_selected_node_weights": poison_cfg.get(
                 "loss_selected_node_weights",
@@ -394,6 +423,30 @@ def resolve_stage_candidates(
             "frequency_decay",
         )
     ]
+    headroom_error_mixes = [
+        float(value)
+        for value in resolve_values(
+            "headroom_error_mixes",
+            poison_cfg.get("headroom_error_mixes", [poison_cfg.get("headroom_error_mix", 0.6)]),
+            "headroom_error_mix",
+        )
+    ]
+    global_shift_fractions = [
+        float(value)
+        for value in resolve_values(
+            "global_shift_fractions",
+            poison_cfg.get("global_shift_fractions", [poison_cfg.get("global_shift_fraction", 0.3)]),
+            "global_shift_fraction",
+        )
+    ]
+    tail_focus_multipliers = [
+        float(value)
+        for value in resolve_values(
+            "tail_focus_multipliers",
+            poison_cfg.get("tail_focus_multipliers", [poison_cfg.get("tail_focus_multiplier", 1.6)]),
+            "tail_focus_multiplier",
+        )
+    ]
     loss_focus_modes = [
         str(value)
         for value in resolve_values(
@@ -445,6 +498,9 @@ def resolve_stage_candidates(
         frequency_smoothing_strengths,
         frequency_cutoff_ratios,
         frequency_decays,
+        headroom_error_mixes,
+        global_shift_fractions,
+        tail_focus_multipliers,
         loss_focus_modes,
         loss_selected_node_weights,
         loss_tail_horizon_weights,
@@ -466,10 +522,13 @@ def resolve_stage_candidates(
             "frequency_smoothing_strength": float(combo[12]),
             "frequency_cutoff_ratio": float(combo[13]),
             "frequency_decay": float(combo[14]),
-            "loss_focus_mode": str(combo[15]),
-            "loss_selected_node_weight": float(combo[16]),
-            "loss_tail_horizon_weight": float(combo[17]),
-            "loss_headroom_boost": float(combo[18]),
+            "headroom_error_mix": float(combo[15]),
+            "global_shift_fraction": float(combo[16]),
+            "tail_focus_multiplier": float(combo[17]),
+            "loss_focus_mode": str(combo[18]),
+            "loss_selected_node_weight": float(combo[19]),
+            "loss_tail_horizon_weight": float(combo[20]),
+            "loss_headroom_boost": float(combo[21]),
         }
         key = candidate_key(candidate)
         if key in seen:
@@ -562,9 +621,9 @@ def evaluate_attack_candidate(
         frequency_cutoff_ratio=float(candidate["frequency_cutoff_ratio"]),
         frequency_decay=float(candidate.get("frequency_decay", 0.35)),
         headroom_floor=float(poison_cfg.get("headroom_floor", 0.0)),
-        headroom_error_mix=float(poison_cfg.get("headroom_error_mix", 0.6)),
-        global_shift_fraction=float(poison_cfg.get("global_shift_fraction", 0.3)),
-        tail_focus_multiplier=float(poison_cfg.get("tail_focus_multiplier", 1.6)),
+        headroom_error_mix=float(candidate.get("headroom_error_mix", poison_cfg.get("headroom_error_mix", 0.6))),
+        global_shift_fraction=float(candidate.get("global_shift_fraction", poison_cfg.get("global_shift_fraction", 0.3))),
+        tail_focus_multiplier=float(candidate.get("tail_focus_multiplier", poison_cfg.get("tail_focus_multiplier", 1.6))),
         loss_focus_mode=str(candidate.get("loss_focus_mode", poison_cfg.get("loss_focus_mode", "uniform"))),
         loss_selected_node_weight=float(candidate.get("loss_selected_node_weight", poison_cfg.get("loss_selected_node_weight", 1.15))),
         loss_tail_horizon_weight=float(candidate.get("loss_tail_horizon_weight", poison_cfg.get("loss_tail_horizon_weight", 1.75))),
@@ -609,9 +668,9 @@ def evaluate_attack_candidate(
         frequency_cutoff_ratio=float(candidate["frequency_cutoff_ratio"]),
         frequency_decay=float(candidate.get("frequency_decay", 0.35)),
         headroom_floor=float(poison_cfg.get("headroom_floor", 0.0)),
-        headroom_error_mix=float(poison_cfg.get("headroom_error_mix", 0.6)),
-        global_shift_fraction=float(poison_cfg.get("global_shift_fraction", 0.3)),
-        tail_focus_multiplier=float(poison_cfg.get("tail_focus_multiplier", 1.6)),
+        headroom_error_mix=float(candidate.get("headroom_error_mix", poison_cfg.get("headroom_error_mix", 0.6))),
+        global_shift_fraction=float(candidate.get("global_shift_fraction", poison_cfg.get("global_shift_fraction", 0.3))),
+        tail_focus_multiplier=float(candidate.get("tail_focus_multiplier", poison_cfg.get("tail_focus_multiplier", 1.6))),
         loss_focus_mode=str(candidate.get("loss_focus_mode", poison_cfg.get("loss_focus_mode", "uniform"))),
         loss_selected_node_weight=float(candidate.get("loss_selected_node_weight", poison_cfg.get("loss_selected_node_weight", 1.15))),
         loss_tail_horizon_weight=float(candidate.get("loss_tail_horizon_weight", poison_cfg.get("loss_tail_horizon_weight", 1.75))),
@@ -666,6 +725,9 @@ def evaluate_attack_candidate(
         "frequency_smoothing_strength": float(candidate["frequency_smoothing_strength"]),
         "frequency_cutoff_ratio": float(candidate["frequency_cutoff_ratio"]),
         "frequency_decay": float(candidate.get("frequency_decay", 0.35)),
+        "headroom_error_mix": float(candidate.get("headroom_error_mix", 0.6)),
+        "global_shift_fraction": float(candidate.get("global_shift_fraction", 0.3)),
+        "tail_focus_multiplier": float(candidate.get("tail_focus_multiplier", 1.6)),
         "loss_focus_mode": str(candidate.get("loss_focus_mode", "uniform")),
         "loss_selected_node_weight": float(candidate.get("loss_selected_node_weight", 1.15)),
         "loss_tail_horizon_weight": float(candidate.get("loss_tail_horizon_weight", 1.75)),
@@ -711,6 +773,9 @@ def evaluate_attack_candidate(
         "frequency_smoothing_strength": float(candidate["frequency_smoothing_strength"]),
         "frequency_cutoff_ratio": float(candidate["frequency_cutoff_ratio"]),
         "frequency_decay": float(candidate.get("frequency_decay", 0.35)),
+        "headroom_error_mix": float(candidate.get("headroom_error_mix", 0.6)),
+        "global_shift_fraction": float(candidate.get("global_shift_fraction", 0.3)),
+        "tail_focus_multiplier": float(candidate.get("tail_focus_multiplier", 1.6)),
         **stealth_metrics,
     }
 
@@ -726,6 +791,7 @@ def evaluate_attack_candidate(
             "clean_pred": clean_pred,
             "triggered_pred": triggered_pred,
             "triggered_inputs": triggered_inputs,
+            "candidate": dict(candidate),
             "selected_nodes": [int(node) for node in poisoned_train["selected_nodes"]],
             "selected_time_indices": [int(idx) for idx in poisoned_train["selected_time_indices"]],
             "selected_target_horizon_indices": [int(idx) for idx in poisoned_train["selected_target_horizon_indices"]],
@@ -757,6 +823,9 @@ def summarize_recheck_rows(candidate_rows: list[dict[str, Any]]) -> dict[str, An
         "frequency_smoothing_strength": float(candidate_rows[0]["frequency_smoothing_strength"]),
         "frequency_cutoff_ratio": float(candidate_rows[0]["frequency_cutoff_ratio"]),
         "frequency_decay": float(candidate_rows[0].get("frequency_decay", 0.35)),
+        "headroom_error_mix": float(candidate_rows[0].get("headroom_error_mix", 0.6)),
+        "global_shift_fraction": float(candidate_rows[0].get("global_shift_fraction", 0.3)),
+        "tail_focus_multiplier": float(candidate_rows[0].get("tail_focus_multiplier", 1.6)),
         "loss_focus_mode": str(candidate_rows[0].get("loss_focus_mode", "uniform")),
         "loss_selected_node_weight": float(candidate_rows[0].get("loss_selected_node_weight", 1.15)),
         "loss_tail_horizon_weight": float(candidate_rows[0].get("loss_tail_horizon_weight", 1.75)),
@@ -815,12 +884,15 @@ def select_top_candidates(
     rows: list[dict[str, Any]],
     thesis_contract: dict[str, Any],
     top_k: int,
+    *,
+    mode: str = "paper",
 ) -> list[dict[str, Any]]:
     if top_k <= 0:
         return []
     deduped: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for row in sorted(rows, key=lambda item: row_sort_key(item, thesis_contract), reverse=True):
+    sort_key = row_sort_key if mode == "paper" else raw_row_sort_key
+    for row in sorted(rows, key=lambda item: sort_key(item, thesis_contract), reverse=True):
         key = candidate_key(candidate_from_row(row))
         if key in seen:
             continue
@@ -829,6 +901,122 @@ def select_top_candidates(
         if len(deduped) >= top_k:
             break
     return deduped
+
+
+def resolve_export_payload(
+    *,
+    best_row: dict[str, Any],
+    thesis_contract: dict[str, Any],
+    payloads_by_candidate: dict[str, dict[str, Any]],
+    rows_by_candidate: dict[str, dict[str, Any]],
+    fallback_seed: int,
+    config: dict[str, Any],
+    bundle,
+    baseline_metrics: dict[str, float],
+    baseline_true: np.ndarray,
+    baseline_pred: np.ndarray,
+    clean_train_pred: np.ndarray,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    chosen_key = candidate_key(candidate_from_row(best_row))
+    payload = payloads_by_candidate.get(chosen_key)
+    chosen_repeat_row = rows_by_candidate.get(chosen_key)
+    export_row = dict(best_row)
+
+    if chosen_repeat_row is not None:
+        export_row["selected_repeat_seed"] = int(chosen_repeat_row["seed"])
+        export_row["selected_repeat_attack_success_rate"] = float(chosen_repeat_row["attack_success_rate"])
+        export_row["selected_repeat_clean_MAE_delta_ratio"] = float(chosen_repeat_row["clean_MAE_delta_ratio"])
+        export_row["selected_repeat_local_main_asr"] = float(
+            chosen_repeat_row.get("raw_selected_nodes_tail_horizon_attack_success_rate", 0.0)
+        )
+
+    if payload is None:
+        _, _, payload = evaluate_attack_candidate(
+            config=config,
+            thesis_contract=thesis_contract,
+            bundle=bundle,
+            baseline_metrics=baseline_metrics,
+            baseline_true=baseline_true,
+            baseline_pred=baseline_pred,
+            clean_train_pred=clean_train_pred,
+            candidate=candidate_from_row(best_row),
+            stage_name="final_export",
+            seed=fallback_seed,
+            capture_payload=True,
+        )
+    if payload is None:
+        raise RuntimeError("Unable to resolve export payload for the selected candidate.")
+    return export_row, payload
+
+
+def save_best_artifacts(
+    *,
+    run_dir: Path,
+    artifact_name: str,
+    config: dict[str, Any],
+    bundle,
+    baseline_true: np.ndarray,
+    baseline_pred: np.ndarray,
+    best_row: dict[str, Any],
+    pre_recheck_row: dict[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, str]:
+    suffix = f"_{artifact_name}"
+    row_path = run_dir / f"best_attack{suffix}.json"
+    model_path = run_dir / f"best_poisoned_model{suffix}.pt"
+    bundle_path = run_dir / f"best_attack_bundle{suffix}.npz"
+    prediction_plot_path = run_dir / f"best_prediction_case{suffix}.png"
+    trigger_plot_path = run_dir / f"trigger_case{suffix}.png"
+
+    save_json(best_row, row_path)
+    torch.save(
+        {
+            "config": config,
+            "model_kwargs": payload["model_kwargs"],
+            "model_state": payload["model_state"],
+            "best_row": best_row,
+            "pre_recheck_best_row": pre_recheck_row,
+            "candidate": payload.get("candidate", {}),
+        },
+        model_path,
+    )
+    np.savez(
+        bundle_path,
+        clean_test_inputs=bundle.test_inputs,
+        triggered_test_inputs=payload["triggered_inputs"],
+        test_targets=bundle.test_targets,
+        baseline_test_predictions=baseline_pred,
+        poisoned_model_clean_predictions=payload["clean_pred"],
+        poisoned_model_trigger_predictions=payload["triggered_pred"],
+        selected_nodes=np.asarray(payload["selected_nodes"], dtype=np.int64),
+        selected_time_indices=np.asarray(payload["selected_time_indices"], dtype=np.int64),
+        selected_target_horizon_indices=np.asarray(payload["selected_target_horizon_indices"], dtype=np.int64),
+        scaler_mean=np.asarray(payload["scaler_mean"], dtype=np.float32),
+        scaler_std=np.asarray(payload["scaler_std"], dtype=np.float32),
+    )
+    plot_prediction_case(
+        baseline_true,
+        baseline_pred,
+        prediction_plot_path,
+        poisoned_pred=payload["triggered_pred"],
+        sample_index=0,
+        node_index=0,
+        title=f"Baseline vs Triggered Prediction ({artifact_name})",
+    )
+    plot_trigger_case(
+        bundle.test_inputs,
+        payload["triggered_inputs"],
+        trigger_plot_path,
+        sample_index=0,
+        node_indices=list(payload["selected_nodes"]),
+    )
+    return {
+        "best_attack_path": str(row_path.resolve()),
+        "best_model_path": str(model_path.resolve()),
+        "best_bundle_path": str(bundle_path.resolve()),
+        "prediction_plot_path": str(prediction_plot_path.resolve()),
+        "trigger_plot_path": str(trigger_plot_path.resolve()),
+    }
 
 
 def main() -> None:
@@ -896,13 +1084,23 @@ def main() -> None:
 
     final_stage_name = stage_name_from_cfg(search_stages[-1], len(search_stages) - 1)
     final_stage_rows = [row for row in all_rows if row["stage_name"] == final_stage_name]
-    pre_recheck_best = choose_best_row(final_stage_rows, thesis_contract)
-    if pre_recheck_best is None:
+    pre_recheck_best_paper = choose_best_row(final_stage_rows, thesis_contract)
+    pre_recheck_best_raw = choose_best_raw_row(final_stage_rows, thesis_contract)
+    if pre_recheck_best_paper is None or pre_recheck_best_raw is None:
         raise RuntimeError("Final poisoning stage did not produce any rows.")
 
     recheck_top_k = int(poison_cfg.get("recheck_top_k", 0))
     recheck_repeats = max(1, int(poison_cfg.get("recheck_repeats", 1)))
-    recheck_candidates = select_top_candidates(final_stage_rows, thesis_contract, recheck_top_k)
+    paper_recheck_candidates = select_top_candidates(final_stage_rows, thesis_contract, recheck_top_k, mode="paper")
+    raw_recheck_candidates = select_top_candidates(final_stage_rows, thesis_contract, recheck_top_k, mode="raw")
+    recheck_candidates: list[dict[str, Any]] = []
+    seen_recheck_candidates: set[str] = set()
+    for candidate in [*paper_recheck_candidates, *raw_recheck_candidates]:
+        key = candidate_key(candidate)
+        if key in seen_recheck_candidates:
+            continue
+        seen_recheck_candidates.add(key)
+        recheck_candidates.append(candidate)
 
     recheck_repeat_rows: list[dict[str, Any]] = []
     recheck_summary_rows: list[dict[str, Any]] = []
@@ -948,36 +1146,38 @@ def main() -> None:
                 best_repeat_row_by_candidate[key] = candidate_best_row
                 best_repeat_payload_by_candidate[key] = candidate_best_payload
 
-    final_best_row = choose_best_row(recheck_summary_rows, thesis_contract) if recheck_summary_rows else None
-    final_payload: dict[str, Any] | None = None
+    final_best_paper = choose_best_row(recheck_summary_rows, thesis_contract) if recheck_summary_rows else pre_recheck_best_paper
+    final_best_raw = choose_best_raw_row(recheck_summary_rows, thesis_contract) if recheck_summary_rows else pre_recheck_best_raw
+    if final_best_paper is None or final_best_raw is None:
+        raise RuntimeError("Unable to select the final champions.")
 
-    if final_best_row is not None:
-        chosen_key = candidate_key(candidate_from_row(final_best_row))
-        final_payload = best_repeat_payload_by_candidate.get(chosen_key)
-        chosen_repeat_row = best_repeat_row_by_candidate.get(chosen_key)
-        if chosen_repeat_row is not None:
-            final_best_row = dict(final_best_row)
-            final_best_row["selected_repeat_seed"] = int(chosen_repeat_row["seed"])
-            final_best_row["selected_repeat_attack_success_rate"] = float(chosen_repeat_row["attack_success_rate"])
-            final_best_row["selected_repeat_clean_MAE_delta_ratio"] = float(chosen_repeat_row["clean_MAE_delta_ratio"])
-    else:
-        _, _, final_payload = evaluate_attack_candidate(
-            config=config,
-            thesis_contract=thesis_contract,
-            bundle=bundle,
-            baseline_metrics=baseline_metrics,
-            baseline_true=baseline_true,
-            baseline_pred=baseline_pred,
-            clean_train_pred=clean_train_pred,
-            candidate=candidate_from_row(pre_recheck_best),
-            stage_name="final_export",
-            seed=base_seed,
-            capture_payload=True,
-        )
-        final_best_row = pre_recheck_best
-
-    if final_payload is None or final_best_row is None:
-        raise RuntimeError("Unable to produce the final poisoning payload.")
+    final_best_paper, final_payload_paper = resolve_export_payload(
+        best_row=final_best_paper,
+        thesis_contract=thesis_contract,
+        payloads_by_candidate=best_repeat_payload_by_candidate,
+        rows_by_candidate=best_repeat_row_by_candidate,
+        fallback_seed=base_seed,
+        config=config,
+        bundle=bundle,
+        baseline_metrics=baseline_metrics,
+        baseline_true=baseline_true,
+        baseline_pred=baseline_pred,
+        clean_train_pred=clean_train_pred,
+    )
+    final_best_raw, final_payload_raw = resolve_export_payload(
+        best_row=final_best_raw,
+        thesis_contract=thesis_contract,
+        payloads_by_candidate=best_repeat_payload_by_candidate,
+        rows_by_candidate=best_repeat_row_by_candidate,
+        fallback_seed=base_seed + 997,
+        config=config,
+        bundle=bundle,
+        baseline_metrics=baseline_metrics,
+        baseline_true=baseline_true,
+        baseline_pred=baseline_pred,
+        clean_train_pred=clean_train_pred,
+    )
+    same_final_candidate = candidate_key(candidate_from_row(final_best_paper)) == candidate_key(candidate_from_row(final_best_raw))
 
     save_table(all_rows, run_dir / "attack_results.csv")
     save_table(all_stealth_rows, run_dir / "stealth_results.csv")
@@ -994,6 +1194,9 @@ def main() -> None:
                 "target_weight_mode": row["target_weight_mode"],
                 "trigger_steps": row["trigger_steps"],
                 "trigger_node_count": row["trigger_node_count"],
+                "headroom_error_mix": row.get("headroom_error_mix"),
+                "global_shift_fraction": row.get("global_shift_fraction"),
+                "tail_focus_multiplier": row.get("tail_focus_multiplier"),
                 "attack_success_rate": row["attack_success_rate"],
                 "raw_selected_nodes_tail_horizon_attack_success_rate": row.get("raw_selected_nodes_tail_horizon_attack_success_rate"),
                 "raw_selected_nodes_attack_success_rate": row.get("raw_selected_nodes_attack_success_rate"),
@@ -1017,72 +1220,109 @@ def main() -> None:
         save_table(recheck_summary_rows, run_dir / "recheck_results.csv")
         write_markdown_summary(run_dir / "recheck_summary.md", "Recheck Results", recheck_summary_rows)
 
-    save_json(pre_recheck_best, run_dir / "best_attack_pre_recheck.json")
-    save_json(final_best_row, run_dir / "best_attack.json")
+    save_json(pre_recheck_best_paper, run_dir / "best_attack_pre_recheck_paper.json")
+    save_json(pre_recheck_best_raw, run_dir / "best_attack_pre_recheck_raw.json")
+    save_json(pre_recheck_best_paper, run_dir / "best_attack_pre_recheck.json")
+    save_json(final_best_paper, run_dir / "best_attack_paper.json")
+    save_json(final_best_raw, run_dir / "best_attack_raw.json")
+    save_json(final_best_paper, run_dir / "best_attack.json")
     save_json(
         {
             "stage_count": len(search_stages),
             "stage_names": [stage_name_from_cfg(stage_cfg, idx) for idx, stage_cfg in enumerate(search_stages)],
             "stage_bests": stage_best_rows,
-            "pre_recheck_best": pre_recheck_best,
-            "final_best": final_best_row,
+            "pre_recheck_best": pre_recheck_best_paper,
+            "pre_recheck_best_paper": pre_recheck_best_paper,
+            "pre_recheck_best_raw": pre_recheck_best_raw,
+            "final_best": final_best_paper,
+            "final_best_paper": final_best_paper,
+            "final_best_raw": final_best_raw,
+            "paper_and_raw_same_candidate": same_final_candidate,
             "recheck_candidate_count": len(recheck_candidates),
             "recheck_repeat_count": recheck_repeats if recheck_candidates else 0,
+            "paper_recheck_candidate_count": len(paper_recheck_candidates),
+            "raw_recheck_candidate_count": len(raw_recheck_candidates),
             "thesis_contract": thesis_contract,
-            "contract_summary": evaluate_main_result_standards(final_best_row, None, None, thesis_contract),
+            "contract_summary": evaluate_main_result_standards(final_best_paper, None, None, thesis_contract),
+            "raw_contract_summary": evaluate_main_result_standards(final_best_raw, None, None, thesis_contract),
         },
         run_dir / "search_summary.json",
     )
-
+    paper_artifacts = save_best_artifacts(
+        run_dir=run_dir,
+        artifact_name="paper",
+        config=config,
+        bundle=bundle,
+        baseline_true=baseline_true,
+        baseline_pred=baseline_pred,
+        best_row=final_best_paper,
+        pre_recheck_row=pre_recheck_best_paper,
+        payload=final_payload_paper,
+    )
+    raw_artifacts = paper_artifacts if same_final_candidate else save_best_artifacts(
+        run_dir=run_dir,
+        artifact_name="raw",
+        config=config,
+        bundle=bundle,
+        baseline_true=baseline_true,
+        baseline_pred=baseline_pred,
+        best_row=final_best_raw,
+        pre_recheck_row=pre_recheck_best_raw,
+        payload=final_payload_raw,
+    )
     torch.save(
         {
             "config": config,
-            "model_kwargs": final_payload["model_kwargs"],
-            "model_state": final_payload["model_state"],
-            "best_row": final_best_row,
-            "pre_recheck_best_row": pre_recheck_best,
+            "model_kwargs": final_payload_paper["model_kwargs"],
+            "model_state": final_payload_paper["model_state"],
+            "best_row": final_best_paper,
+            "pre_recheck_best_row": pre_recheck_best_paper,
         },
         run_dir / "best_poisoned_model.pt",
     )
     np.savez(
         run_dir / "best_attack_bundle.npz",
         clean_test_inputs=bundle.test_inputs,
-        triggered_test_inputs=final_payload["triggered_inputs"],
+        triggered_test_inputs=final_payload_paper["triggered_inputs"],
         test_targets=bundle.test_targets,
         baseline_test_predictions=baseline_pred,
-        poisoned_model_clean_predictions=final_payload["clean_pred"],
-        poisoned_model_trigger_predictions=final_payload["triggered_pred"],
-        selected_nodes=np.asarray(final_payload["selected_nodes"], dtype=np.int64),
-        selected_time_indices=np.asarray(final_payload["selected_time_indices"], dtype=np.int64),
-        selected_target_horizon_indices=np.asarray(final_payload["selected_target_horizon_indices"], dtype=np.int64),
-        scaler_mean=np.asarray(final_payload["scaler_mean"], dtype=np.float32),
-        scaler_std=np.asarray(final_payload["scaler_std"], dtype=np.float32),
+        poisoned_model_clean_predictions=final_payload_paper["clean_pred"],
+        poisoned_model_trigger_predictions=final_payload_paper["triggered_pred"],
+        selected_nodes=np.asarray(final_payload_paper["selected_nodes"], dtype=np.int64),
+        selected_time_indices=np.asarray(final_payload_paper["selected_time_indices"], dtype=np.int64),
+        selected_target_horizon_indices=np.asarray(final_payload_paper["selected_target_horizon_indices"], dtype=np.int64),
+        scaler_mean=np.asarray(final_payload_paper["scaler_mean"], dtype=np.float32),
+        scaler_std=np.asarray(final_payload_paper["scaler_std"], dtype=np.float32),
     )
-
     plot_prediction_case(
         baseline_true,
         baseline_pred,
         run_dir / "best_prediction_case.png",
-        poisoned_pred=final_payload["triggered_pred"],
+        poisoned_pred=final_payload_paper["triggered_pred"],
         sample_index=0,
         node_index=0,
         title="Baseline vs Triggered Prediction",
     )
     plot_trigger_case(
         bundle.test_inputs,
-        final_payload["triggered_inputs"],
+        final_payload_paper["triggered_inputs"],
         run_dir / "trigger_case.png",
         sample_index=0,
-        node_indices=list(final_payload["selected_nodes"]),
+        node_indices=list(final_payload_paper["selected_nodes"]),
     )
 
     save_json(
         {
             "baseline_dir": str(baseline_path) if baseline_path else None,
             "best_attack_path": str((run_dir / "best_attack.json").resolve()),
+            "best_attack_paper_path": str((run_dir / "best_attack_paper.json").resolve()),
+            "best_attack_raw_path": str((run_dir / "best_attack_raw.json").resolve()),
             "best_model_path": str((run_dir / "best_poisoned_model.pt").resolve()),
             "search_summary_path": str((run_dir / "search_summary.json").resolve()),
             "recheck_results_path": str((run_dir / "recheck_results.csv").resolve()) if recheck_summary_rows else None,
+            "paper_artifacts": paper_artifacts,
+            "raw_artifacts": raw_artifacts,
+            "paper_and_raw_same_candidate": same_final_candidate,
         },
         run_dir / "run_manifest.json",
     )

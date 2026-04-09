@@ -1,0 +1,46 @@
+{
+  "source_poison_dir": "C:\\Users\\Administrator\\Desktop\\wanzi\\repo\\results\\metr_la_poison_20260409_163212",
+  "rows": [
+    {
+      "name": "zscore_anomaly_screen",
+      "clean_flag_rate": 0.1371487119437939,
+      "poison_flag_rate": 0.1371487119437939,
+      "flag_rate_gap": 0.0,
+      "clean_score_mean": 0.004250387491656201,
+      "poison_score_mean": 0.004250387491656201,
+      "score_mean_gap": 0.0,
+      "threshold": 3.0
+    },
+    {
+      "name": "high_freq_energy_check",
+      "clean_flag_rate": 0.12046252927400468,
+      "poison_flag_rate": 0.12046252927400468,
+      "flag_rate_gap": 0.0,
+      "clean_ratio_mean": 0.1871271945929799,
+      "poison_ratio_mean": 0.18713078179709972,
+      "ratio_mean_gap": 3.587204119803733e-06,
+      "threshold": 0.25,
+      "cutoff": 0.5
+    },
+    {
+      "name": "moving_average_sensitivity",
+      "clean_delta": 0.08555641681260029,
+      "poison_delta": 0.08556039751160982,
+      "delta_gap": 3.980699009531463e-06,
+      "kernel_size": 3
+    },
+    {
+      "name": "moving_average_asr_effect",
+      "asr_before": 0.014197892271662764,
+      "asr_after": 0.014490632318501171,
+      "asr_gap": 0.0002927400468384078,
+      "local_asr_before": 0.07362412177985948,
+      "local_asr_after": 0.0740632318501171,
+      "local_asr_gap": 0.00043911007025761173,
+      "target_horizon_local_asr_before": 0.07362412177985948,
+      "target_horizon_local_asr_after": 0.0740632318501171,
+      "target_horizon_local_asr_gap": 0.00043911007025761173,
+      "kernel_size": 3
+    }
+  ]
+}

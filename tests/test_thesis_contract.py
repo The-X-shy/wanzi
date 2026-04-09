@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import csv
 import importlib.util
+import shutil
 import sys
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +16,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from traffic_poison.experiment import pick_best_attack_row
 from traffic_poison.thesis_contract import (
+    choose_best_raw_row,
     choose_best_row,
     eligible_for_cross_replay,
     evaluate_main_result_standards,
@@ -29,6 +32,12 @@ def load_build_thesis_tables_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def make_repo_temp_dir() -> Path:
+    path = REPO_ROOT / "results" / f"test_contract_{uuid.uuid4().hex}"
+    path.mkdir(parents=True, exist_ok=False)
+    return path
 
 
 class ThesisContractTests(unittest.TestCase):
@@ -100,8 +109,8 @@ class ThesisContractTests(unittest.TestCase):
             },
         ]
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            poison_dir = Path(tmpdir)
+        poison_dir = make_repo_temp_dir()
+        try:
             with (poison_dir / "attack_results.csv").open("w", encoding="utf-8", newline="") as handle:
                 writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
                 writer.writeheader()
@@ -109,6 +118,8 @@ class ThesisContractTests(unittest.TestCase):
 
             frame = module.build_candidate_table(poison_dir, self.contract)
             top_row = frame.iloc[0].to_dict()
+        finally:
+            shutil.rmtree(poison_dir, ignore_errors=True)
 
         self.assertAlmostEqual(top_row["raw_selected_nodes_tail_horizon_attack_success_rate"], 0.057)
         self.assertTrue(bool(top_row["direction_ok"]))
@@ -179,6 +190,125 @@ class ThesisContractTests(unittest.TestCase):
 
         best = choose_best_row(rows, self.contract)
         self.assertAlmostEqual(best["raw_selected_nodes_tail_horizon_target_shift_attainment"], -0.0003)
+
+    def test_paper_and_raw_champions_can_diverge(self) -> None:
+        rows = [
+            {
+                "selection_strategy": "error",
+                "window_mode": "hybrid",
+                "attack_success_rate": 0.0148,
+                "clean_MAE_delta_ratio": 0.036,
+                "raw_selected_nodes_tail_horizon_attack_success_rate": 0.071,
+                "raw_selected_nodes_tail_horizon_shift_direction_match_rate": 0.68,
+                "raw_selected_nodes_tail_horizon_target_shift_attainment": 0.002,
+                "frequency_energy_shift": 0.042,
+                "mean_z_score": 0.75,
+            },
+            {
+                "selection_strategy": "error",
+                "window_mode": "hybrid",
+                "attack_success_rate": 0.0152,
+                "clean_MAE_delta_ratio": 0.039,
+                "raw_selected_nodes_tail_horizon_attack_success_rate": 0.061,
+                "raw_selected_nodes_tail_horizon_shift_direction_match_rate": 0.66,
+                "raw_selected_nodes_tail_horizon_target_shift_attainment": 0.001,
+                "frequency_energy_shift": 0.043,
+                "mean_z_score": 0.74,
+            },
+        ]
+
+        paper_best = choose_best_row(rows, self.contract)
+        raw_best = choose_best_raw_row(rows, self.contract)
+
+        self.assertAlmostEqual(paper_best["attack_success_rate"], 0.0152)
+        self.assertAlmostEqual(raw_best["raw_selected_nodes_tail_horizon_attack_success_rate"], 0.071)
+
+    def test_paper_fallback_prefers_candidate_closest_to_minimum_line(self) -> None:
+        rows = [
+            {
+                "selection_strategy": "error",
+                "window_mode": "hybrid",
+                "attack_success_rate": 0.0148,
+                "clean_MAE_delta_ratio": 0.036,
+                "raw_selected_nodes_tail_horizon_attack_success_rate": 0.071,
+                "raw_selected_nodes_tail_horizon_shift_direction_match_rate": 0.68,
+                "raw_selected_nodes_tail_horizon_target_shift_attainment": 0.002,
+                "frequency_energy_shift": 0.042,
+                "mean_z_score": 0.75,
+            },
+            {
+                "selection_strategy": "error",
+                "window_mode": "hybrid",
+                "attack_success_rate": 0.0100,
+                "clean_MAE_delta_ratio": 0.031,
+                "raw_selected_nodes_tail_horizon_attack_success_rate": 0.080,
+                "raw_selected_nodes_tail_horizon_shift_direction_match_rate": 0.70,
+                "raw_selected_nodes_tail_horizon_target_shift_attainment": 0.003,
+                "frequency_energy_shift": 0.042,
+                "mean_z_score": 0.74,
+            },
+        ]
+
+        best = choose_best_row(rows, self.contract)
+        self.assertAlmostEqual(best["attack_success_rate"], 0.0148)
+
+    def test_candidate_table_dedupes_with_new_directional_parameters(self) -> None:
+        module = load_build_thesis_tables_module()
+        rows = [
+            {
+                "selection_strategy": "error",
+                "window_mode": "hybrid",
+                "trigger_steps": 3,
+                "trigger_node_count": 3,
+                "poison_ratio": 0.02,
+                "sigma_multiplier": 0.065,
+                "target_shift_ratio": 0.08,
+                "sample_selection_mode": "directional_headroom",
+                "target_weight_mode": "dual_focus",
+                "headroom_error_mix": 0.60,
+                "global_shift_fraction": 0.30,
+                "tail_focus_multiplier": 1.60,
+                "attack_success_rate": 0.0148,
+                "clean_MAE_delta_ratio": 0.036,
+                "raw_selected_nodes_tail_horizon_attack_success_rate": 0.071,
+                "raw_selected_nodes_tail_horizon_shift_direction_match_rate": 0.68,
+                "frequency_energy_shift": 0.042,
+                "mean_z_score": 0.75,
+            },
+            {
+                "selection_strategy": "error",
+                "window_mode": "hybrid",
+                "trigger_steps": 3,
+                "trigger_node_count": 3,
+                "poison_ratio": 0.02,
+                "sigma_multiplier": 0.065,
+                "target_shift_ratio": 0.08,
+                "sample_selection_mode": "directional_headroom",
+                "target_weight_mode": "dual_focus",
+                "headroom_error_mix": 0.60,
+                "global_shift_fraction": 0.35,
+                "tail_focus_multiplier": 1.60,
+                "attack_success_rate": 0.0151,
+                "clean_MAE_delta_ratio": 0.037,
+                "raw_selected_nodes_tail_horizon_attack_success_rate": 0.069,
+                "raw_selected_nodes_tail_horizon_shift_direction_match_rate": 0.67,
+                "frequency_energy_shift": 0.042,
+                "mean_z_score": 0.75,
+            },
+        ]
+
+        poison_dir = make_repo_temp_dir()
+        try:
+            with (poison_dir / "attack_results.csv").open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+                writer.writeheader()
+                writer.writerows(rows)
+
+            frame = module.build_candidate_table(poison_dir, self.contract)
+        finally:
+            shutil.rmtree(poison_dir, ignore_errors=True)
+
+        self.assertEqual(len(frame), 2)
 
 
 if __name__ == "__main__":
