@@ -1,0 +1,44 @@
+[
+  {
+    "direction": "loss_rebalance",
+    "run_dir": "C:\\Users\\Administrator\\Desktop\\wanzi\\repo\\results\\metr_la_poison_20260409_163212",
+    "paper_local_asr": 0.07308743169398907,
+    "paper_legacy_asr": 0.017418032786885248,
+    "paper_clean_mae_delta_ratio": 0.03632440995800127,
+    "paper_shift_direction_match_rate": 0.7111143637782983,
+    "paper_target_shift_attainment": -0.000637153201494329,
+    "raw_local_asr": 0.07308743169398907,
+    "raw_legacy_asr": 0.017418032786885248,
+    "minimum_bar_met": true,
+    "strong_bar_met": false,
+    "same_candidate": true
+  },
+  {
+    "direction": "selection_balance",
+    "run_dir": "C:\\Users\\Administrator\\Desktop\\wanzi\\repo\\results\\metr_la_poison_20260409_161435",
+    "paper_local_asr": 0.0698672911787666,
+    "paper_legacy_asr": 0.01712529274004684,
+    "paper_clean_mae_delta_ratio": 0.03845993323452753,
+    "paper_shift_direction_match_rate": 0.6858899297423888,
+    "paper_target_shift_attainment": 0.01952236772132929,
+    "raw_local_asr": 0.07103825136612021,
+    "raw_legacy_asr": 0.01483216237314598,
+    "minimum_bar_met": true,
+    "strong_bar_met": false,
+    "same_candidate": false
+  },
+  {
+    "direction": "spread_recovery",
+    "run_dir": "C:\\Users\\Administrator\\Desktop\\wanzi\\repo\\results\\metr_la_poison_20260409_160412",
+    "paper_local_asr": 0.06850117096018735,
+    "paper_legacy_asr": 0.016539812646370024,
+    "paper_clean_mae_delta_ratio": 0.039676776930526264,
+    "paper_shift_direction_match_rate": 0.7336065573770493,
+    "paper_target_shift_attainment": 0.0017034337183443697,
+    "raw_local_asr": 0.07103825136612021,
+    "raw_legacy_asr": 0.01483216237314598,
+    "minimum_bar_met": true,
+    "strong_bar_met": false,
+    "same_candidate": false
+  }
+]
