@@ -21,34 +21,21 @@ import pandas as pd
 import torch
 from scipy import fft as sp_fft
 
+from .utils import ensure_3d, to_numpy, to_tensor_like
 
 ArrayLike = Any
 
 
 def _to_numpy(x: ArrayLike) -> np.ndarray:
-    if isinstance(x, np.ndarray):
-        return x
-    if torch.is_tensor(x):
-        return x.detach().cpu().numpy()
-    if isinstance(x, pd.DataFrame):
-        return x.to_numpy()
-    if isinstance(x, pd.Series):
-        return x.to_numpy()
-    return np.asarray(x)
+    return to_numpy(x)
 
 
 def _to_tensor_like(x: np.ndarray, reference: ArrayLike) -> ArrayLike:
-    if torch.is_tensor(reference):
-        return torch.as_tensor(x, dtype=reference.dtype, device=reference.device)
-    return x
+    return to_tensor_like(x, reference)
 
 
 def _ensure_3d(x: np.ndarray) -> Tuple[np.ndarray, bool]:
-    if x.ndim == 2:
-        return x[None, ...], True
-    if x.ndim != 3:
-        raise ValueError(f"Expected 2D or 3D array, got shape {x.shape}")
-    return x, False
+    return ensure_3d(x)
 
 
 def _safe_std(x: np.ndarray, axis=None, keepdims: bool = False) -> np.ndarray:
@@ -56,11 +43,82 @@ def _safe_std(x: np.ndarray, axis=None, keepdims: bool = False) -> np.ndarray:
     return np.where(std < 1e-8, 1.0, std)
 
 
+def _feature_vector(values: ArrayLike, feature_dim: int, *, default: float = 1.0) -> np.ndarray:
+    arr = _to_numpy(values).astype(np.float64, copy=False)
+    if arr.size == 0:
+        return np.full(feature_dim, default, dtype=np.float64)
+    arr = arr.reshape(-1)
+    if arr.size == 1:
+        return np.full(feature_dim, float(arr[0]), dtype=np.float64)
+    if arr.size != feature_dim:
+        raise ValueError(f"Expected {feature_dim} feature values, got {arr.size}.")
+    return arr.astype(np.float64, copy=False)
+
+
+def _feature_broadcast(values: ArrayLike, ndim: int, feature_dim: int, *, default: float = 1.0) -> np.ndarray:
+    vector = _feature_vector(values, feature_dim, default=default)
+    shape = (1,) * (ndim - 1) + (feature_dim,)
+    return vector.reshape(shape)
+
+
+def _extract_scaler_params(scaler: Any | None, feature_dim: int) -> tuple[np.ndarray, np.ndarray] | None:
+    if scaler is None:
+        return None
+    mean = getattr(scaler, "mean", None)
+    std = getattr(scaler, "std", None)
+    if mean is None or std is None:
+        return None
+    mean_vec = _feature_vector(mean, feature_dim, default=0.0)
+    std_vec = _feature_vector(std, feature_dim, default=1.0)
+    std_vec = np.where(np.abs(std_vec) < 1e-8, 1.0, std_vec)
+    return mean_vec, std_vec
+
+
+def _inverse_feature_space(values: np.ndarray, scaler: Any | None) -> np.ndarray:
+    params = _extract_scaler_params(scaler, values.shape[-1])
+    if params is None:
+        return values.astype(np.float64, copy=True)
+    mean_vec, std_vec = params
+    mean = mean_vec.reshape((1,) * (values.ndim - 1) + (values.shape[-1],))
+    std = std_vec.reshape((1,) * (values.ndim - 1) + (values.shape[-1],))
+    return values.astype(np.float64, copy=False) * std + mean
+
+
+def _transform_feature_space(values: np.ndarray, scaler: Any | None) -> np.ndarray:
+    params = _extract_scaler_params(scaler, values.shape[-1])
+    if params is None:
+        return values.astype(np.float64, copy=True)
+    mean_vec, std_vec = params
+    mean = mean_vec.reshape((1,) * (values.ndim - 1) + (values.shape[-1],))
+    std = std_vec.reshape((1,) * (values.ndim - 1) + (values.shape[-1],))
+    return (values.astype(np.float64, copy=False) - mean) / std
+
+
+def _current_space_trigger_scale(
+    feature_std: ArrayLike,
+    scaler: Any | None,
+    feature_dim: int,
+) -> np.ndarray:
+    raw_scale = _feature_vector(feature_std, feature_dim, default=1.0)
+    params = _extract_scaler_params(scaler, feature_dim)
+    if params is None:
+        return np.where(np.abs(raw_scale) < 1e-8, 1.0, raw_scale)
+    _, scaler_std = params
+    # A raw-space perturbation of sigma * feature_std becomes
+    # sigma * feature_std / scaler_std in the training space.
+    scale = raw_scale / np.where(np.abs(scaler_std) < 1e-8, 1.0, scaler_std)
+    return np.where(np.abs(scale) < 1e-8, 1.0, scale)
+
+
 def _moving_average_1d(values: np.ndarray, kernel_size: int = 3) -> np.ndarray:
     if kernel_size <= 1:
         return values
     kernel = np.ones(kernel_size, dtype=np.float64) / float(kernel_size)
-    return np.convolve(values, kernel, mode="same")
+    smoothed = np.convolve(values, kernel, mode="same")
+    if smoothed.shape[0] == values.shape[0]:
+        return smoothed
+    start = max(0, (smoothed.shape[0] - values.shape[0]) // 2)
+    return smoothed[start : start + values.shape[0]]
 
 
 def _minmax_normalize(values: np.ndarray) -> np.ndarray:
@@ -106,6 +164,87 @@ def _lowpass_filter_1d(values: np.ndarray, cutoff_ratio: float = 0.5, decay: flo
         offsets = np.arange(high_freq_count, dtype=np.float64) / float(high_freq_count)
         filtered[keep_bins:] *= np.exp(-(offsets / max(float(decay), 1e-6)) ** 2)
     return sp_fft.irfft(filtered, n=values.shape[0]).real
+
+
+def extract_spectral_template(
+    train_data: ArrayLike,
+    node_indices: Sequence[int] | None = None,
+    *,
+    smooth_bins: int = 3,
+) -> dict[str, np.ndarray]:
+    """Extract per-node spectral envelope templates from clean training data.
+
+    Returns a dict with:
+    - ``magnitude``: mean rFFT magnitude spectrum per node [freq_bins, nodes]
+    - ``phase_mean``: mean phase per node (for reference)
+    - ``freq_bins``: number of frequency bins
+    """
+    arr = _to_numpy(train_data).astype(np.float64, copy=False)
+    arr, _ = _ensure_3d(arr)
+    num_nodes = arr.shape[2]
+    if node_indices is not None:
+        selected = _sanitize_indices(node_indices, num_nodes)
+        if selected.size == 0:
+            selected = np.arange(num_nodes, dtype=int)
+    else:
+        selected = np.arange(num_nodes, dtype=int)
+
+    spectra = sp_fft.rfft(arr, axis=1)
+    magnitude = np.mean(np.abs(spectra), axis=0)  # [time_freq, nodes]
+    phase_mean = np.angle(np.mean(spectra, axis=0))
+
+    if smooth_bins > 1 and magnitude.shape[0] > smooth_bins:
+        kernel = np.ones(smooth_bins, dtype=np.float64) / float(smooth_bins)
+        for n_idx in range(magnitude.shape[1]):
+            magnitude[:, n_idx] = np.convolve(magnitude[:, n_idx], kernel, mode="same")
+
+    return {
+        "magnitude": magnitude[:, selected].astype(np.float64),
+        "phase_mean": phase_mean[:, selected].astype(np.float64),
+        "freq_bins": int(magnitude.shape[0]),
+    }
+
+
+def _spectral_shape_constraint(
+    perturbation: np.ndarray,
+    template: dict[str, np.ndarray] | None,
+    strength: float,
+) -> np.ndarray:
+    """Reshape perturbation spectrum to partially match the natural spectral envelope.
+
+    When strength=0 the perturbation is unchanged; when strength=1 the perturbation
+    spectrum is fully replaced by the template-scaled version.
+    """
+    if template is None or strength < 1e-8:
+        return perturbation
+
+    blend = float(np.clip(strength, 0.0, 1.0))
+    result = perturbation.copy()
+    num_nodes = result.shape[2]
+    template_nodes = template["magnitude"].shape[1]
+
+    for b in range(result.shape[0]):
+        for n_local, n_global in enumerate(range(min(num_nodes, template_nodes))):
+            signal_1d = result[b, :, n_global]
+            if np.allclose(signal_1d, 0.0):
+                continue
+            spectrum = sp_fft.rfft(signal_1d)
+            orig_magnitude = np.abs(spectrum)
+            orig_phase = np.angle(spectrum)
+            template_mag = template["magnitude"][:, n_local]
+            # Scale template to match total energy of original perturbation
+            orig_energy = np.sum(orig_magnitude)
+            template_energy = np.sum(template_mag)
+            if template_energy > 1e-12:
+                scaled_template = template_mag * (orig_energy / template_energy)
+            else:
+                scaled_template = template_mag
+            # Blend: keep some of the original spectral shape
+            blended_magnitude = (1.0 - blend) * orig_magnitude + blend * scaled_template
+            shaped_spectrum = blended_magnitude * np.exp(1j * orig_phase)
+            result[b, :, n_global] = sp_fft.irfft(shaped_spectrum, n=signal_1d.shape[0]).real
+
+    return result
 
 
 def _sanitize_indices(indices: Sequence[int] | np.ndarray | None, upper_bound: int) -> np.ndarray:
@@ -242,6 +381,46 @@ def _select_prediction_region(
     return selected
 
 
+def _apply_target_shift(
+    target: np.ndarray,
+    *,
+    selected_nodes: np.ndarray,
+    horizon_indices: np.ndarray,
+    target_weight_mode: str,
+    effective_shift: float,
+    node_weights: np.ndarray,
+    horizon_weights: np.ndarray,
+    global_shift_fraction: float,
+    tail_focus_multiplier: float,
+) -> np.ndarray:
+    adjusted = np.asarray(target, dtype=np.float64).copy()
+    if horizon_indices.size == 0:
+        return adjusted * max(0.0, 1.0 - abs(effective_shift))
+
+    if target_weight_mode == "flat":
+        flat_horizon_weights = np.linspace(0.8, 1.0, max(1, horizon_indices.size), dtype=np.float64)
+        for horizon_idx, horizon_weight in zip(horizon_indices.tolist(), flat_horizon_weights.tolist()):
+            adjusted[horizon_idx, selected_nodes] *= max(0.0, 1.0 - abs(effective_shift) * float(horizon_weight))
+        return adjusted
+
+    if target_weight_mode == "ranked_decay":
+        for node_idx, node_weight in zip(selected_nodes.tolist(), node_weights.tolist()):
+            for horizon_idx, horizon_weight in zip(horizon_indices.tolist(), horizon_weights.tolist()):
+                scale = max(0.0, 1.0 - abs(effective_shift) * float(node_weight) * float(horizon_weight))
+                adjusted[horizon_idx, node_idx] *= scale
+        return adjusted
+
+    base_shift = abs(effective_shift) * float(np.clip(global_shift_fraction, 0.0, 1.0))
+    if base_shift > 0.0:
+        adjusted[:, selected_nodes] *= max(0.0, 1.0 - base_shift)
+    focus_multiplier = max(float(tail_focus_multiplier), 0.0)
+    for node_idx, node_weight in zip(selected_nodes.tolist(), node_weights.tolist()):
+        for horizon_idx, horizon_weight in zip(horizon_indices.tolist(), horizon_weights.tolist()):
+            extra_shift = abs(effective_shift) * focus_multiplier * float(node_weight) * float(horizon_weight)
+            adjusted[horizon_idx, node_idx] *= max(0.0, 1.0 - extra_shift)
+    return adjusted
+
+
 def _candidate_window_lengths(time_len: int, window_size: int, prediction_horizon: int) -> np.ndarray:
     """Return compact analysis windows so ranking does not collapse to one start."""
 
@@ -343,6 +522,8 @@ def _score_time_windows(
                     score += grad_proxy * float(np.mean(centrality) if centrality is not None else 1.0)
             elif strategy == "random":
                 score = float(np.random.default_rng(start + int(length)).random())
+            elif strategy in {"mi", "loo_sensitivity"}:
+                score = float(np.mean(np.abs(window - np.mean(arr, axis=1, keepdims=True))))
             else:
                 raise ValueError(f"Unknown strategy: {strategy}")
 
@@ -413,6 +594,59 @@ def score_vulnerable_windows(
         )
         window_scores = start_scores
 
+    elif strategy == "mi":
+        bins = max(5, min(50, int(np.sqrt(time_len))))
+        mi_scores = np.zeros(num_nodes, dtype=np.float64)
+        for n_idx in range(num_nodes):
+            past = arr[0, :time_len - prediction_horizon, n_idx]
+            future = arr[0, prediction_horizon:, n_idx]
+            min_len = min(past.size, future.size)
+            if min_len < 5:
+                continue
+            past = past[-min_len:]
+            future = future[-min_len:]
+            hist_2d, _, _ = np.histogram2d(past, future, bins=bins)
+            p_xy = hist_2d / (hist_2d.sum() + 1e-12)
+            p_x = p_xy.sum(axis=1, keepdims=True)
+            p_y = p_xy.sum(axis=0, keepdims=True)
+            denom = p_x @ p_y
+            mutual = np.sum(p_xy * np.log(np.maximum(p_xy, 1e-12) / np.maximum(denom, 1e-12)))
+            h_xy = -np.sum(p_xy * np.log(np.maximum(p_xy, 1e-12)))
+            mi_scores[n_idx] = float(mutual / max(h_xy, 1e-12))
+        node_scores = mi_scores
+        top_windows, start_scores, time_scores = _score_time_windows(
+            arr, window_size=window_size, prediction_horizon=prediction_horizon,
+            strategy="error", adjacency=adjacency, model=model,
+        )
+        window_scores = start_scores
+
+    elif strategy == "loo_sensitivity":
+        if model is not None:
+            model.eval()
+            full_input = torch.as_tensor(arr, dtype=torch.float32)
+            with torch.no_grad():
+                full_pred = model(full_input).detach().cpu().numpy()
+            full_error = np.mean(np.abs(full_pred - arr), axis=(0, 1))
+            loo_scores = np.zeros(num_nodes, dtype=np.float64)
+            for n_idx in range(num_nodes):
+                masked = arr.copy()
+                masked[:, :, n_idx] = 0.0
+                masked_tensor = torch.as_tensor(masked, dtype=torch.float32)
+                with torch.no_grad():
+                    masked_pred = model(masked_tensor).detach().cpu().numpy()
+                masked_error = np.mean(np.abs(masked_pred - arr), axis=(0, 1))
+                loo_scores[n_idx] = float(np.mean(np.abs(masked_error - full_error)))
+            node_scores = loo_scores
+        else:
+            centrality = np.std(arr, axis=(0, 1))
+            centrality = centrality / (np.sum(centrality) + 1e-8)
+            node_scores = centrality * np.mean(np.abs(arr - np.mean(arr, axis=1, keepdims=True)), axis=(0, 1))
+        top_windows, start_scores, time_scores = _score_time_windows(
+            arr, window_size=window_size, prediction_horizon=prediction_horizon,
+            strategy="error", adjacency=adjacency, model=model,
+        )
+        window_scores = start_scores
+
     elif strategy == "centrality_gradient":
         if adjacency is not None:
             adj = _to_numpy(adjacency).astype(np.float64, copy=False)
@@ -456,9 +690,10 @@ def score_vulnerable_windows(
     else:
         raise ValueError(f"Unknown strategy: {strategy}")
 
-    if strategy == "random":
+    if strategy in {"random", "mi", "loo_sensitivity"}:
         node_rank = np.argsort(-node_scores)[:top_k]
         window_rank = top_windows[:top_k]
+        top_time_indices = np.argsort(-time_scores)[: min(top_k, len(time_scores))]
         time_rank = top_time_indices[:top_k]
     else:
         node_rank = np.argsort(-node_scores)[:top_k]
@@ -490,16 +725,27 @@ def generate_smooth_trigger(
     frequency_smoothing_strength: float = 0.0,
     frequency_cutoff_ratio: float = 0.5,
     frequency_decay: float = 0.35,
+    amplitude_scale: Optional[ArrayLike] = None,
+    spectral_template: Optional[dict[str, np.ndarray]] = None,
+    spectral_constraint_strength: float = 0.0,
     random_state: Optional[int] = None,
 ) -> ArrayLike:
-    """Generate a smooth trigger over selected times and nodes."""
+    """Generate a smooth trigger over selected times and nodes.
+
+    When ``spectral_template`` is provided and ``spectral_constraint_strength > 0``,
+    the perturbation spectrum is shaped toward the natural traffic spectral envelope,
+    making the trigger harder to detect via frequency-domain inspection.
+    """
 
     rng = np.random.default_rng(random_state)
     arr = _to_numpy(sample).astype(np.float64, copy=True)
     original_shape = arr.shape
     arr3d, squeezed = _ensure_3d(arr)
 
-    scale = _safe_std(arr3d, axis=(0, 1), keepdims=True)
+    if amplitude_scale is None:
+        scale = _safe_std(arr3d, axis=(0, 1), keepdims=True)
+    else:
+        scale = _feature_broadcast(amplitude_scale, arr3d.ndim, arr3d.shape[2], default=1.0)
     if node_indices is None:
         selected_nodes = np.arange(min(nodes, arr3d.shape[2]), dtype=int)
     else:
@@ -537,6 +783,9 @@ def generate_smooth_trigger(
                     (1.0 - blend) * perturb[batch_idx, :, node_idx] + blend * lowpassed
                 )
 
+    if spectral_constraint_strength > 1e-8 and spectral_template is not None:
+        perturb = _spectral_shape_constraint(perturb, spectral_template, spectral_constraint_strength)
+
     jitter = rng.normal(loc=0.0, scale=0.01 * sigma, size=perturb.shape)
     perturb += jitter * (perturb != 0.0)
 
@@ -544,6 +793,121 @@ def generate_smooth_trigger(
     if squeezed:
         poisoned = poisoned[0]
     return _to_tensor_like(poisoned.reshape(original_shape), sample)
+
+
+def optimize_trigger_pattern(
+    model: torch.nn.Module,
+    sample_inputs: ArrayLike,
+    node_indices: Sequence[int],
+    time_indices: Sequence[int],
+    target_shift_ratio: float,
+    *,
+    sigma_init: float = 0.1,
+    lr: float = 0.01,
+    epochs: int = 100,
+    stealth_lambda: float = 0.1,
+    frequency_weight: float = 0.5,
+    amplitude_scale: ArrayLike | None = None,
+    patience: int = 20,
+    device: str = "cpu",
+) -> np.ndarray:
+    """Optimize a trigger pattern via gradient descent on a frozen clean model.
+
+    The trigger is learned to push predictions toward the target shift direction
+    while regularizing for stealth (frequency energy and time-domain amplitude).
+
+    Returns a perturbation array of shape ``(time_len, num_nodes)`` that can be
+    added to input samples at the specified time/node positions.
+    """
+    arr = _to_numpy(sample_inputs).astype(np.float32, copy=False)
+    arr, _ = _ensure_3d(arr)
+    time_len = arr.shape[1]
+    num_nodes = arr.shape[2]
+
+    selected_nodes = _sanitize_indices(node_indices, num_nodes)
+    if selected_nodes.size == 0:
+        selected_nodes = np.arange(num_nodes, dtype=int)
+    selected_times = _sanitize_indices(time_indices, time_len)
+    if selected_times.size == 0:
+        selected_times = _resolve_tail_time_indices(time_len, 3)
+
+    if amplitude_scale is not None:
+        scale = _feature_broadcast(amplitude_scale, 2, num_nodes, default=1.0).reshape(num_nodes)
+    else:
+        scale = _safe_std(arr, axis=(0, 1)).reshape(num_nodes)
+
+    direction = -1.0 if target_shift_ratio <= 0 else 1.0
+    init_perturb = np.zeros((time_len, num_nodes), dtype=np.float32)
+    for t in selected_times:
+        init_perturb[t, selected_nodes] = direction * sigma_init * scale[selected_nodes]
+
+    trigger = torch.tensor(init_perturb, dtype=torch.float32, device=device, requires_grad=True)
+
+    sample_tensor = torch.as_tensor(arr, dtype=torch.float32, device=device)
+    model.to(device)
+    model.eval()
+    for param in model.parameters():
+        param.requires_grad_(False)
+
+    optimizer = torch.optim.Adam([trigger], lr=lr)
+    best_loss = float("inf")
+    best_trigger = trigger.detach().clone()
+    patience_left = patience
+
+    # Precompute trigger mask so only selected positions contribute
+    trigger_mask = torch.zeros(time_len, num_nodes, dtype=torch.float32, device=device)
+    for t in selected_times:
+        trigger_mask[t, selected_nodes] = 1.0
+
+    for epoch in range(epochs):
+        optimizer.zero_grad()
+
+        # Apply masked trigger
+        perturbed = sample_tensor + trigger.unsqueeze(0) * trigger_mask.unsqueeze(0)
+        pred = model(perturbed)
+        clean_pred = model(sample_tensor)
+
+        # Attack loss: push prediction toward target shift direction
+        pred_mean = pred.mean(dim=(1, 2))
+        clean_mean = clean_pred.mean(dim=(1, 2))
+        realized_shift = (clean_mean - pred_mean) / torch.clamp(clean_mean.abs(), min=1e-8)
+        target_shift = abs(target_shift_ratio)
+        attack_loss = torch.relu(target_shift - realized_shift).mean()
+
+        # Stealth regularization
+        triggered_energy = torch.mean(trigger * trigger)
+        # Frequency penalty: high-frequency energy in trigger
+        trigger_np = trigger.detach().cpu().numpy()
+        freq_penalty_val = 0.0
+        for n_idx in selected_nodes:
+            spectrum = np.abs(sp_fft.rfft(trigger_np[:, n_idx]))
+            if spectrum.size > 2:
+                high_start = max(1, spectrum.size // 2)
+                freq_penalty_val += float(np.sum(spectrum[high_start:]) / max(np.sum(spectrum), 1e-12))
+        freq_penalty = torch.tensor(freq_penalty_val / max(len(selected_nodes), 1), device=device)
+
+        loss = attack_loss + stealth_lambda * (triggered_energy + frequency_weight * freq_penalty)
+
+        loss.backward()
+        # Zero out gradients outside the trigger mask
+        with torch.no_grad():
+            trigger.grad *= trigger_mask
+        optimizer.step()
+
+        current_loss = float(loss.detach().cpu().item())
+        if current_loss < best_loss - 1e-8:
+            best_loss = current_loss
+            best_trigger = trigger.detach().clone()
+            patience_left = patience
+        else:
+            patience_left -= 1
+            if patience_left <= 0:
+                break
+
+    result = best_trigger.detach().cpu().numpy().astype(np.float64)
+    # Zero out positions outside the mask
+    mask_np = trigger_mask.detach().cpu().numpy()
+    return result * mask_np
 
 
 def construct_poisoned_samples(
@@ -857,8 +1221,16 @@ def build_poisoned_training_set(
     loss_selected_node_weight: float = 1.0,
     loss_tail_horizon_weight: float = 1.0,
     loss_headroom_boost: float = 0.0,
+    feature_scaler: Any | None = None,
+    trigger_feature_std: ArrayLike | None = None,
+    spectral_constraint_strength: float = 0.0,
 ) -> Dict[str, Any]:
-    """Build poisoned training inputs and shifted targets."""
+    """Build poisoned training inputs and shifted targets.
+
+    When ``spectral_constraint_strength > 0``, the perturbation spectrum is shaped
+    toward the natural traffic spectral envelope extracted from the clean inputs,
+    improving stealth against frequency-domain defenses.
+    """
 
     inputs = _to_numpy(train_inputs)
     inputs, squeezed = _ensure_3d(inputs)
@@ -949,18 +1321,16 @@ def build_poisoned_training_set(
     else:
         poisoned_indices = np.argsort(-sample_scores)[:poison_n].astype(int)
 
-    std = _to_numpy(feature_std).astype(np.float64, copy=False)
-    if std.ndim == 0:
-        std = np.array([float(std)], dtype=np.float64)
-    if std.ndim == 1:
-        std = std.reshape(1, 1, -1)
-    elif std.ndim == 2:
-        std = std.reshape(1, *std.shape)
-    std = np.where(std < 1e-8, 1.0, std)
-
     poisoned_inputs = inputs.copy()
     poisoned_targets = targets.copy()
     poisoned_loss_weights = np.ones_like(targets, dtype=np.float64)
+    raw_targets = _inverse_feature_space(targets, feature_scaler)
+    trigger_scale_source = feature_std if trigger_feature_std is None else trigger_feature_std
+    trigger_amplitude_scale = _current_space_trigger_scale(trigger_scale_source, feature_scaler, inputs.shape[2])
+
+    spectral_template = None
+    if spectral_constraint_strength > 1e-8:
+        spectral_template = extract_spectral_template(inputs, node_indices=selected)
 
     effective_shift = target_shift_ratio if abs(target_shift_ratio) > 1e-12 else fallback_shift_ratio
     applied_target_horizon_indices = selected_target_horizon_indices
@@ -994,38 +1364,37 @@ def build_poisoned_training_set(
             frequency_smoothing_strength=frequency_smoothing_strength,
             frequency_cutoff_ratio=frequency_cutoff_ratio,
             frequency_decay=frequency_decay,
+            amplitude_scale=trigger_amplitude_scale,
+            spectral_template=spectral_template,
+            spectral_constraint_strength=spectral_constraint_strength,
             random_state=int(idx),
         )
         if applied_target_horizon_indices.size == 0:
-            poisoned_targets[idx] = poisoned_targets[idx] * (1.0 - abs(effective_shift))
+            adjusted_raw_target = _apply_target_shift(
+                raw_targets[idx],
+                selected_nodes=selected,
+                horizon_indices=applied_target_horizon_indices,
+                target_weight_mode=target_weight_mode,
+                effective_shift=effective_shift,
+                node_weights=resolved_node_weights,
+                horizon_weights=resolved_horizon_weights,
+                global_shift_fraction=global_shift_fraction,
+                tail_focus_multiplier=tail_focus_multiplier,
+            )
+            poisoned_targets[idx] = _transform_feature_space(adjusted_raw_target[None, ...], feature_scaler)[0]
         else:
-            adjusted_target = np.array(poisoned_targets[idx], dtype=np.float64, copy=True)
-            if target_weight_mode == "flat":
-                flat_horizon_weights = np.linspace(0.8, 1.0, max(1, applied_target_horizon_indices.size), dtype=np.float64)
-                for horizon_idx, horizon_weight in zip(applied_target_horizon_indices.tolist(), flat_horizon_weights.tolist()):
-                    adjusted_target[horizon_idx, selected] *= max(0.0, 1.0 - abs(effective_shift) * float(horizon_weight))
-            elif target_weight_mode == "ranked_decay":
-                for node_idx, node_weight in zip(selected.tolist(), resolved_node_weights.tolist()):
-                    for horizon_idx, horizon_weight in zip(
-                        applied_target_horizon_indices.tolist(),
-                        resolved_horizon_weights.tolist(),
-                    ):
-                        scale = max(0.0, 1.0 - abs(effective_shift) * float(node_weight) * float(horizon_weight))
-                        adjusted_target[horizon_idx, node_idx] *= scale
-            else:
-                base_shift = abs(effective_shift) * float(np.clip(global_shift_fraction, 0.0, 1.0))
-                if base_shift > 0.0:
-                    adjusted_target[:, selected] *= max(0.0, 1.0 - base_shift)
-                focus_multiplier = max(float(tail_focus_multiplier), 0.0)
-                for node_idx, node_weight in zip(selected.tolist(), resolved_node_weights.tolist()):
-                    for horizon_idx, horizon_weight in zip(
-                        applied_target_horizon_indices.tolist(),
-                        resolved_horizon_weights.tolist(),
-                    ):
-                        extra_shift = abs(effective_shift) * focus_multiplier * float(node_weight) * float(horizon_weight)
-                        scale = max(0.0, 1.0 - extra_shift)
-                        adjusted_target[horizon_idx, node_idx] *= scale
-            poisoned_targets[idx] = adjusted_target
+            adjusted_raw_target = _apply_target_shift(
+                raw_targets[idx],
+                selected_nodes=selected,
+                horizon_indices=applied_target_horizon_indices,
+                target_weight_mode=target_weight_mode,
+                effective_shift=effective_shift,
+                node_weights=resolved_node_weights,
+                horizon_weights=resolved_horizon_weights,
+                global_shift_fraction=global_shift_fraction,
+                tail_focus_multiplier=tail_focus_multiplier,
+            )
+            poisoned_targets[idx] = _transform_feature_space(adjusted_raw_target[None, ...], feature_scaler)[0]
         if loss_focus_mode == "uniform":
             continue
         if loss_focus_mode != "directional_focus":
@@ -1075,6 +1444,7 @@ def build_poisoned_training_set(
         "frequency_smoothing_strength": float(np.clip(frequency_smoothing_strength, 0.0, 1.0)),
         "frequency_cutoff_ratio": float(np.clip(frequency_cutoff_ratio, 0.05, 1.0)),
         "frequency_decay": float(max(frequency_decay, 1e-6)),
+        "spectral_constraint_strength": float(np.clip(spectral_constraint_strength, 0.0, 1.0)),
         "headroom_floor": float(headroom_floor),
         "headroom_error_mix": float(np.clip(headroom_error_mix, 0.0, 1.0)),
         "global_shift_fraction": float(np.clip(global_shift_fraction, 0.0, 1.0)),
@@ -1113,15 +1483,26 @@ def compute_attack_success_metrics(
     true_mean = np.mean(true_arr, axis=(1, 2))
     pred_mean = np.mean(pred_arr, axis=(1, 2))
     target_mean = true_mean * (1.0 - abs(target_shift_ratio))
-    lower = target_mean * (1.0 - tolerance_ratio)
-    upper = target_mean * (1.0 + tolerance_ratio)
+    tolerance_width = np.maximum(np.abs(target_mean), 1e-8) * abs(float(tolerance_ratio))
+    lower = target_mean - tolerance_width
+    upper = target_mean + tolerance_width
     success_mask = (pred_mean >= lower) & (pred_mean <= upper)
+    target_arr = true_arr * (1.0 - abs(target_shift_ratio))
+    element_tolerance = np.maximum(np.abs(target_arr), 1e-8) * abs(float(tolerance_ratio))
+    element_success = np.abs(pred_arr - target_arr) <= element_tolerance
+    sample_all_success = np.all(element_success, axis=(1, 2))
     return {
         "attack_success_rate": float(np.mean(success_mask)),
+        "elementwise_attack_success_rate": float(np.mean(element_success)),
+        "sample_all_attack_success_rate": float(np.mean(sample_all_success)),
         "success_mask": success_mask,
+        "element_success_mask": element_success,
+        "sample_all_success_mask": sample_all_success,
         "true_mean": true_mean,
         "pred_mean": pred_mean,
         "target_mean": target_mean,
+        "lower": lower,
+        "upper": upper,
         "tolerance_ratio": tolerance_ratio,
         "target_shift_ratio": target_shift_ratio,
     }
@@ -1238,6 +1619,8 @@ def compute_attack_evaluation_views(
             horizon_indices=kwargs.get("horizon_indices"),
         )
         metrics[f"{prefix}_attack_success_rate"] = float(asr_metrics["attack_success_rate"])
+        metrics[f"{prefix}_elementwise_attack_success_rate"] = float(asr_metrics["elementwise_attack_success_rate"])
+        metrics[f"{prefix}_sample_all_attack_success_rate"] = float(asr_metrics["sample_all_attack_success_rate"])
         metrics[f"{prefix}_mean_prediction_shift_ratio"] = float(shift_metrics["mean_prediction_shift_ratio"])
         metrics[f"{prefix}_median_prediction_shift_ratio"] = float(shift_metrics["median_prediction_shift_ratio"])
         metrics[f"{prefix}_target_shift_attainment"] = float(shift_metrics["target_shift_attainment"])

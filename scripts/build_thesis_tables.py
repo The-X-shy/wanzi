@@ -43,6 +43,36 @@ def load_csv(path: Path) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
+def require_columns(frame: pd.DataFrame, required_columns: list[str], source: Path | str) -> None:
+    missing = [column for column in required_columns if column not in frame.columns]
+    if missing:
+        joined = ", ".join(missing)
+        raise ValueError(f"{source} is missing required result columns: {joined}")
+
+
+def require_json_keys(payload: dict[str, Any], required_keys: list[str], source: Path | str) -> None:
+    missing = [key for key in required_keys if key not in payload]
+    if missing:
+        joined = ", ".join(missing)
+        raise ValueError(f"{source} is missing required result fields: {joined}")
+
+
+def require_defense_rows(frame: pd.DataFrame, source: Path | str) -> None:
+    require_columns(frame, ["name"], source)
+    required_by_name = {
+        "zscore_anomaly_screen": ["clean_flag_rate", "poison_flag_rate", "flag_rate_gap"],
+        "high_freq_energy_check": ["clean_flag_rate", "poison_flag_rate", "flag_rate_gap"],
+        "moving_average_asr_effect": ["asr_before", "asr_after", "asr_gap"],
+    }
+    for row_name, columns in required_by_name.items():
+        row = frame[frame["name"] == row_name]
+        if row.empty:
+            raise ValueError(f"{source} is missing required defense row: {row_name}")
+        require_columns(row, columns, f"{source}:{row_name}")
+        if row.iloc[0][columns].isna().any():
+            raise ValueError(f"{source}:{row_name} has empty required defense values.")
+
+
 def candidate_id(frame: pd.DataFrame) -> pd.Series:
     sample_selection_mode = (
         frame["sample_selection_mode"] if "sample_selection_mode" in frame.columns else pd.Series("input_energy", index=frame.index)
@@ -215,11 +245,31 @@ def build_baseline_table(metr_baseline_dir: Path, cross_dir: Path | None) -> pd.
 def build_candidate_table(poison_dir: Path, thesis_contract: dict[str, Any]) -> pd.DataFrame:
     recheck_path = poison_dir / "recheck_results.csv"
     if recheck_path.exists():
-        frame = load_csv(recheck_path)
+        source_path = recheck_path
+        source_frame = load_csv(source_path)
     else:
-        frame = load_csv(poison_dir / "attack_results.csv")
-        frame = dedupe_candidates(frame, thesis_contract)
-
+        source_path = poison_dir / "attack_results.csv"
+        source_frame = load_csv(source_path)
+    require_columns(
+        source_frame,
+        [
+            "selection_strategy",
+            "window_mode",
+            "trigger_steps",
+            "trigger_node_count",
+            "poison_ratio",
+            "sigma_multiplier",
+            "target_shift_ratio",
+            "attack_success_rate",
+            "clean_MAE_delta_ratio",
+            "raw_selected_nodes_tail_horizon_attack_success_rate",
+            "raw_selected_nodes_tail_horizon_shift_direction_match_rate",
+            "frequency_energy_shift",
+            "mean_z_score",
+        ],
+        source_path,
+    )
+    frame = source_frame.copy() if recheck_path.exists() else dedupe_candidates(source_frame, thesis_contract)
     frame = frame.copy()
     frame = ensure_columns(
         frame,
@@ -498,12 +548,17 @@ def build_parameter_sensitivity(poison_dir: Path, thesis_contract: dict[str, Any
 
 
 def build_defense_table(defense_dir: Path) -> pd.DataFrame:
-    summary = load_json(defense_dir / "defense_summary.json")
+    summary_path = defense_dir / "defense_summary.json"
+    summary = load_json(summary_path)
+    require_json_keys(summary, ["rows"], summary_path)
     frame = pd.DataFrame(summary.get("rows", []))
+    if frame.empty:
+        raise ValueError(f"{summary_path} does not contain any defense rows.")
     if "clean_flag_rate" in frame.columns and "poison_flag_rate" in frame.columns and "flag_rate_gap" not in frame.columns:
         frame["flag_rate_gap"] = frame["poison_flag_rate"] - frame["clean_flag_rate"]
     if "asr_before" in frame.columns and "asr_after" in frame.columns and "asr_gap" not in frame.columns:
         frame["asr_gap"] = frame["asr_after"] - frame["asr_before"]
+    require_defense_rows(frame, summary_path)
     return frame
 
 
@@ -549,7 +604,9 @@ def build_summary_payload(
     }
 
     if cross_dir is not None and (cross_dir / "cross_dataset_summary.json").exists():
-        cross_summary = load_json(cross_dir / "cross_dataset_summary.json")
+        cross_summary_path = cross_dir / "cross_dataset_summary.json"
+        cross_summary = load_json(cross_summary_path)
+        require_json_keys(cross_summary, ["final_best", "selected_candidate_count"], cross_summary_path)
         summary["cross_dataset_summary"] = cross_summary
         cross_best = dict(cross_summary.get("final_best", {}))
         summary.update(evaluate_cross_result_standards(cross_best, thesis_contract))

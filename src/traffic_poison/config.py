@@ -80,6 +80,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "frequency_cutoff_ratios": [0.5],
         "frequency_decay": 0.35,
         "frequency_decays": [0.35],
+        "spectral_constraint_strength": 0.0,
+        "spectral_constraint_strengths": [0.0],
         "success_tolerance_ratio": 0.03,
         "evaluation_tail_horizon_count": 3,
         "max_clean_mae_delta_ratio": 0.05,

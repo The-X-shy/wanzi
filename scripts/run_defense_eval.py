@@ -120,9 +120,15 @@ def main() -> None:
     rows.append(
         {
             "name": "moving_average_asr_effect",
-            "asr_before": float(poisoned_asr["attack_success_rate"]),
-            "asr_after": float(smoothed_asr["attack_success_rate"]),
-            "asr_gap": float(smoothed_asr["attack_success_rate"] - poisoned_asr["attack_success_rate"]),
+            "asr_before": float(poisoned_views.get("raw_global_attack_success_rate", poisoned_asr["attack_success_rate"])),
+            "asr_after": float(smoothed_views.get("raw_global_attack_success_rate", smoothed_asr["attack_success_rate"])),
+            "asr_gap": float(
+                smoothed_views.get("raw_global_attack_success_rate", smoothed_asr["attack_success_rate"])
+                - poisoned_views.get("raw_global_attack_success_rate", poisoned_asr["attack_success_rate"])
+            ),
+            "scaled_asr_before": float(poisoned_asr["attack_success_rate"]),
+            "scaled_asr_after": float(smoothed_asr["attack_success_rate"]),
+            "scaled_asr_gap": float(smoothed_asr["attack_success_rate"] - poisoned_asr["attack_success_rate"]),
             "local_asr_before": float(poisoned_views.get("raw_selected_nodes_tail_horizon_attack_success_rate", 0.0)),
             "local_asr_after": float(smoothed_views.get("raw_selected_nodes_tail_horizon_attack_success_rate", 0.0)),
             "local_asr_gap": float(

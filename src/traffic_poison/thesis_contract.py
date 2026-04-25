@@ -65,6 +65,20 @@ def _get_first_float(row: Mapping[str, Any], keys: Iterable[str], default: float
     return default
 
 
+def _has_float(row: Mapping[str, Any] | None, key: str) -> bool:
+    if row is None or key not in row or row[key] in {None, ""}:
+        return False
+    try:
+        float(row[key])
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def has_main_local_asr(row: Mapping[str, Any] | None, thesis_contract: Mapping[str, Any]) -> bool:
+    return _has_float(row, str(thesis_contract["main_local_asr_key"]))
+
+
 def main_local_asr(row: Mapping[str, Any], thesis_contract: Mapping[str, Any]) -> float:
     return _get_first_float(
         row,
@@ -301,6 +315,7 @@ def choose_best_raw_row(rows: list[dict[str, Any]], thesis_contract: Mapping[str
 def candidate_contract_flags(row: Mapping[str, Any], thesis_contract: Mapping[str, Any]) -> dict[str, Any]:
     within_budget = within_clean_budget(row, thesis_contract)
     return {
+        "has_main_local_asr": has_main_local_asr(row, thesis_contract),
         "within_clean_budget": within_budget,
         "within_budget": within_budget,
         "direction_ok": direction_ok(row, thesis_contract),
@@ -320,8 +335,8 @@ def eligible_for_cross_replay(row: Mapping[str, Any] | None, thesis_contract: Ma
     if row is None:
         return False
     return (
-        main_local_asr(row, thesis_contract)
-        > _as_float(thesis_contract.get("previous_mainline_local_asr"), 0.0)
+        has_main_local_asr(row, thesis_contract)
+        and main_local_asr(row, thesis_contract) > _as_float(thesis_contract.get("previous_mainline_local_asr"), 0.0)
         and clean_mae_delta_ratio(row)
         <= _as_float(thesis_contract.get("cross_replay_clean_mae_delta_ratio_max"), 0.04)
         and direction_ok(row, thesis_contract)
@@ -343,7 +358,9 @@ def passes_main_result_minimum_bar(
     if baseline_spread is not None and baseline_spread > _as_float(thesis_contract.get("baseline_spread_max"), 0.05):
         return False
     return (
-        clean_mae_delta_ratio(final_best) <= _as_float(thesis_contract.get("clean_mae_delta_ratio_max"), 0.05)
+        has_main_local_asr(final_best, thesis_contract)
+        and _has_float(final_best, str(thesis_contract.get("legacy_asr_key", "attack_success_rate")))
+        and clean_mae_delta_ratio(final_best) <= _as_float(thesis_contract.get("clean_mae_delta_ratio_max"), 0.05)
         and main_local_asr(final_best, thesis_contract) >= _as_float(thesis_contract.get("minimum_main_local_asr"), 0.05)
         and legacy_asr(final_best, thesis_contract) >= _as_float(thesis_contract.get("minimum_legacy_asr"), 0.015)
         and shift_direction_match_rate(final_best, thesis_contract)
@@ -367,7 +384,9 @@ def passes_main_result_strong_bar(
     if baseline_spread is not None and baseline_spread > _as_float(thesis_contract.get("baseline_spread_strong_max"), 0.035):
         return False
     return (
-        clean_mae_delta_ratio(final_best)
+        has_main_local_asr(final_best, thesis_contract)
+        and _has_float(final_best, str(thesis_contract.get("legacy_asr_key", "attack_success_rate")))
+        and clean_mae_delta_ratio(final_best)
         <= _as_float(thesis_contract.get("clean_mae_delta_ratio_strong_max"), 0.04)
         and main_local_asr(final_best, thesis_contract) >= _as_float(thesis_contract.get("strong_main_local_asr"), 0.06)
         and legacy_asr(final_best, thesis_contract) >= _as_float(thesis_contract.get("strong_legacy_asr"), 0.018)

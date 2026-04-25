@@ -9,47 +9,39 @@ import pandas as pd
 import torch
 from scipy import fft as sp_fft
 
+from .utils import ensure_3d, to_numpy, to_tensor_like
 
 ArrayLike = Any
 
 
 def _to_numpy(x: ArrayLike) -> np.ndarray:
-    if isinstance(x, np.ndarray):
-        return x
-    if torch.is_tensor(x):
-        return x.detach().cpu().numpy()
-    if isinstance(x, pd.DataFrame):
-        return x.to_numpy()
-    if isinstance(x, pd.Series):
-        return x.to_numpy()
-    return np.asarray(x)
+    return to_numpy(x)
 
 
 def _to_tensor_like(x: np.ndarray, reference: ArrayLike) -> ArrayLike:
-    if torch.is_tensor(reference):
-        return torch.as_tensor(x, dtype=reference.dtype, device=reference.device)
-    return x
+    return to_tensor_like(x, reference)
 
 
 def _ensure_3d(x: np.ndarray) -> Tuple[np.ndarray, bool]:
-    if x.ndim == 2:
-        return x[None, ...], True
-    if x.ndim != 3:
-        raise ValueError(f"Expected 2D or 3D array, got shape {x.shape}")
-    return x, False
+    return ensure_3d(x)
 
 
 def zscore_anomaly_screen(
     samples: ArrayLike,
     threshold: float = 3.0,
     axis: Sequence[int] = (0, 1),
+    reference_samples: ArrayLike | None = None,
 ) -> Dict[str, Any]:
     """Return a mask and per-sample anomaly score using z-score screening."""
 
     arr = _to_numpy(samples).astype(np.float64, copy=False)
     arr, squeezed = _ensure_3d(arr)
-    mean = np.mean(arr, axis=axis, keepdims=True)
-    std = np.std(arr, axis=axis, keepdims=True)
+    reference = arr if reference_samples is None else _to_numpy(reference_samples).astype(np.float64, copy=False)
+    reference, _ = _ensure_3d(reference)
+    if reference.shape[1:] != arr.shape[1:]:
+        raise ValueError("reference_samples must have the same time and feature shape as samples.")
+    mean = np.mean(reference, axis=axis, keepdims=True)
+    std = np.std(reference, axis=axis, keepdims=True)
     std = np.where(std < 1e-8, 1.0, std)
     z = np.abs((arr - mean) / std)
     anomaly_mask = np.any(z > threshold, axis=(1, 2))
@@ -61,6 +53,7 @@ def zscore_anomaly_screen(
         "mask": anomaly_mask,
         "score": anomaly_score,
         "threshold": threshold,
+        "uses_reference_samples": reference_samples is not None,
     }
 
 
@@ -141,6 +134,107 @@ def combined_defense_report(
     }
 
 
+def neural_cleanse_regression(
+    model: torch.nn.Module,
+    sample_inputs: ArrayLike,
+    target_shift_ratio: float = 0.05,
+    *,
+    lr: float = 0.01,
+    epochs: int = 200,
+    anomaly_threshold_std: float = 2.0,
+    device: str = "cpu",
+) -> dict[str, Any]:
+    """Simplified Neural Cleanse adapted for regression backdoor detection.
+
+    For each node, a minimal trigger pattern (mask + perturbation) is learned
+    that would produce the target shift. Nodes whose learned trigger has an
+    anomalously small L1 norm are flagged as potentially backdoored.
+
+    Returns per-node anomaly scores and flagged nodes.
+    """
+    arr = _to_numpy(sample_inputs).astype(np.float32, copy=False)
+    arr, _ = _ensure_3d(arr)
+    num_nodes = arr.shape[2]
+    time_len = arr.shape[1]
+
+    sample_tensor = torch.as_tensor(arr, dtype=torch.float32, device=device)
+    model.to(device)
+    model.eval()
+    for param in model.parameters():
+        param.requires_grad_(False)
+
+    node_norms: list[float] = []
+    per_node_details: list[dict[str, Any]] = []
+
+    for node_idx in range(num_nodes):
+        mask = torch.zeros(1, time_len, num_nodes, dtype=torch.float32, device=device)
+        mask[:, :, node_idx] = 1.0
+        trigger = torch.zeros(1, time_len, num_nodes, dtype=torch.float32, device=device, requires_grad=True)
+
+        optimizer = torch.optim.Adam([trigger], lr=lr)
+        best_norm = float("inf")
+        patience_left = 30
+
+        for _epoch in range(epochs):
+            optimizer.zero_grad()
+            perturbed = sample_tensor + trigger * mask
+            pred = model(perturbed)
+            clean_pred = model(sample_tensor)
+            pred_mean = pred.mean()
+            clean_mean = clean_pred.mean()
+            realized = (clean_mean - pred_mean) / torch.clamp(clean_mean.abs(), min=1e-8)
+            attack_loss = torch.relu(abs(target_shift_ratio) - realized)
+
+            l1_norm = torch.norm(trigger, p=1)
+            loss = attack_loss + 0.001 * l1_norm
+            loss.backward()
+            optimizer.step()
+
+            current_norm = float(l1_norm.detach().cpu().item())
+            if attack_loss < 0.01 and current_norm < best_norm:
+                best_norm = current_norm
+                patience_left = 30
+            else:
+                patience_left -= 1
+                if patience_left <= 0:
+                    break
+
+        final_norm = float(torch.norm(trigger, p=1).detach().cpu().item())
+        node_norms.append(final_norm)
+        per_node_details.append({"node": node_idx, "trigger_l1_norm": final_norm})
+
+    norms = np.array(node_norms, dtype=np.float64)
+    median_norm = float(np.median(norms))
+    mad = float(np.median(np.abs(norms - median_norm)))
+    mad_scaled = mad * 1.4826  # scale to approximate std for normal distribution
+    if mad_scaled < 1e-12:
+        mad_scaled = float(np.std(norms)) if np.std(norms) > 1e-12 else 1.0
+
+    anomaly_scores = (norms - median_norm) / mad_scaled
+    flagged = anomaly_scores < -anomaly_threshold_std
+
+    return {
+        "node_norms": node_norms,
+        "median_norm": median_norm,
+        "mad": mad_scaled,
+        "anomaly_scores": anomaly_scores.tolist(),
+        "flagged_nodes": np.where(flagged)[0].tolist(),
+        "anomaly_threshold": float(anomaly_threshold_std),
+        "per_node_details": per_node_details,
+    }
+
+
+def detect_backdoor_nodes(
+    model: torch.nn.Module,
+    sample_inputs: ArrayLike,
+    target_shift_ratio: float = 0.05,
+    **kwargs,
+) -> list[int]:
+    """Convenience wrapper returning only flagged node indices."""
+    report = neural_cleanse_regression(model, sample_inputs, target_shift_ratio, **kwargs)
+    return report["flagged_nodes"]
+
+
 def evaluate_simple_defenses(
     clean_inputs: ArrayLike,
     poisoned_inputs: ArrayLike,
@@ -164,8 +258,8 @@ def evaluate_simple_defenses(
     energy_ratio_threshold = float(cfg.get("energy_ratio_threshold", 0.35))
     high_freq_cutoff = float(cfg.get("high_freq_cutoff", 0.5))
 
-    clean_z = zscore_anomaly_screen(clean_inputs, threshold=z_threshold)
-    poison_z = zscore_anomaly_screen(poisoned_inputs, threshold=z_threshold)
+    clean_z = zscore_anomaly_screen(clean_inputs, threshold=z_threshold, reference_samples=clean_inputs)
+    poison_z = zscore_anomaly_screen(poisoned_inputs, threshold=z_threshold, reference_samples=clean_inputs)
     clean_freq = high_freq_energy_check(
         clean_inputs,
         energy_ratio_threshold=energy_ratio_threshold,

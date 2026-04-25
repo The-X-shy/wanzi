@@ -1,0 +1,141 @@
+experiment_name: metr_la_opt_stealth_spread
+seed: 42
+
+dataset:
+  name: METR-LA
+  data_path: ../data/metr-la.h5
+  data_key: df
+  adjacency_path: ../data/adj_mx.pkl
+  input_len: 12
+  horizon: 12
+  train_ratio: 0.7
+  val_ratio: 0.1
+  test_ratio: 0.2
+  batch_size: 256
+  num_workers: 0
+  fill_missing: true
+  scale: true
+  shuffle_train: false
+
+training:
+  hidden_size: 64
+  num_layers: 2
+  dropout: 0.0
+  lr: 0.0005
+  weight_decay: 0.0
+  epochs: 30
+  patience: 10
+  loss: mae
+  device: auto
+  repeats: 1
+  grad_clip_norm: 0.5
+
+poison:
+  trigger_steps: 3
+  fallback_shift_ratio: 0.05
+  success_tolerance_ratio: 0.03
+  evaluation_tail_horizon_count: 3
+  node_rank_weights: [1.0, 0.9, 0.8, 0.7, 0.6]
+  tail_horizon_weights: [0.7, 0.85, 1.0]
+  recheck_top_k: 4
+  recheck_repeats: 3
+  candidate_defaults: &spread_base
+    selection_strategy: error
+    window_mode: hybrid
+    trigger_steps: 3
+    sample_selection_mode: directional_headroom
+    target_weight_mode: dual_focus
+    target_horizon_mode: all
+    target_horizon_count: 3
+    time_smoothing_kernel: 5
+    frequency_smoothing_strength: 0.25
+    frequency_cutoff_ratio: 0.35
+    frequency_decay: 0.25
+    headroom_error_mix: 0.6
+    loss_focus_mode: directional_focus
+  search_stages:
+    - name: stealth_spread_main
+      explicit_candidates:
+        - <<: *spread_base
+          trigger_node_count: 4
+          poison_ratio: 0.040
+          sigma_multiplier: 0.026
+          target_shift_ratio: 0.090
+          global_shift_fraction: 0.45
+          tail_focus_multiplier: 1.8
+          loss_selected_node_weight: 1.35
+          loss_tail_horizon_weight: 2.60
+          loss_headroom_boost: 1.10
+        - <<: *spread_base
+          trigger_node_count: 4
+          poison_ratio: 0.050
+          sigma_multiplier: 0.026
+          target_shift_ratio: 0.095
+          global_shift_fraction: 0.50
+          tail_focus_multiplier: 1.9
+          loss_selected_node_weight: 1.40
+          loss_tail_horizon_weight: 2.80
+          loss_headroom_boost: 1.20
+        - <<: *spread_base
+          trigger_node_count: 4
+          poison_ratio: 0.050
+          sigma_multiplier: 0.024
+          target_shift_ratio: 0.100
+          global_shift_fraction: 0.55
+          tail_focus_multiplier: 2.0
+          loss_selected_node_weight: 1.45
+          loss_tail_horizon_weight: 3.00
+          loss_headroom_boost: 1.25
+        - <<: *spread_base
+          trigger_node_count: 5
+          poison_ratio: 0.040
+          sigma_multiplier: 0.020
+          target_shift_ratio: 0.090
+          global_shift_fraction: 0.50
+          tail_focus_multiplier: 1.9
+          loss_selected_node_weight: 1.40
+          loss_tail_horizon_weight: 2.80
+          loss_headroom_boost: 1.20
+        - <<: *spread_base
+          trigger_node_count: 5
+          poison_ratio: 0.050
+          sigma_multiplier: 0.020
+          target_shift_ratio: 0.100
+          global_shift_fraction: 0.55
+          tail_focus_multiplier: 2.0
+          loss_selected_node_weight: 1.45
+          loss_tail_horizon_weight: 3.00
+          loss_headroom_boost: 1.25
+        - <<: *spread_base
+          trigger_node_count: 5
+          poison_ratio: 0.050
+          sigma_multiplier: 0.022
+          target_shift_ratio: 0.095
+          global_shift_fraction: 0.50
+          tail_focus_multiplier: 2.0
+          loss_selected_node_weight: 1.45
+          loss_tail_horizon_weight: 3.00
+          loss_headroom_boost: 1.25
+        - <<: *spread_base
+          trigger_node_count: 5
+          poison_ratio: 0.060
+          sigma_multiplier: 0.018
+          target_shift_ratio: 0.100
+          global_shift_fraction: 0.60
+          tail_focus_multiplier: 2.1
+          loss_selected_node_weight: 1.50
+          loss_tail_horizon_weight: 3.20
+          loss_headroom_boost: 1.30
+        - <<: *spread_base
+          trigger_node_count: 4
+          poison_ratio: 0.060
+          sigma_multiplier: 0.022
+          target_shift_ratio: 0.100
+          global_shift_fraction: 0.60
+          tail_focus_multiplier: 2.1
+          loss_selected_node_weight: 1.50
+          loss_tail_horizon_weight: 3.20
+          loss_headroom_boost: 1.30
+
+output:
+  root_dir: ../results

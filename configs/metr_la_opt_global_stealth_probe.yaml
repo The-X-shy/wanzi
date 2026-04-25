@@ -1,0 +1,152 @@
+experiment_name: metr_la_opt_global_stealth_probe
+seed: 42
+
+dataset:
+  name: METR-LA
+  data_path: ../data/metr-la.h5
+  data_key: df
+  adjacency_path: ../data/adj_mx.pkl
+  input_len: 12
+  horizon: 12
+  train_ratio: 0.7
+  val_ratio: 0.1
+  test_ratio: 0.2
+  batch_size: 256
+  num_workers: 0
+  fill_missing: true
+  scale: true
+  shuffle_train: false
+
+training:
+  hidden_size: 64
+  num_layers: 2
+  dropout: 0.0
+  lr: 0.0005
+  weight_decay: 0.0
+  epochs: 30
+  patience: 10
+  loss: mae
+  device: auto
+  repeats: 1
+  grad_clip_norm: 0.5
+
+poison:
+  trigger_steps: 3
+  trigger_node_count: 3
+  fallback_shift_ratio: 0.05
+  success_tolerance_ratio: 0.03
+  evaluation_tail_horizon_count: 3
+  node_rank_weights: [1.0, 0.85, 0.7]
+  tail_horizon_weights: [0.7, 0.85, 1.0]
+  recheck_top_k: 4
+  recheck_repeats: 3
+  candidate_defaults: &global_stealth_base
+    selection_strategy: error
+    window_mode: hybrid
+    trigger_steps: 3
+    trigger_node_count: 3
+    sample_selection_mode: directional_headroom
+    target_weight_mode: dual_focus
+    target_horizon_mode: all
+    target_horizon_count: 3
+    time_smoothing_kernel: 5
+    frequency_smoothing_strength: 0.25
+    frequency_cutoff_ratio: 0.35
+    frequency_decay: 0.25
+    spectral_constraint_strength: 0.0
+    headroom_error_mix: 0.6
+    global_shift_fraction: 0.30
+    tail_focus_multiplier: 1.60
+    loss_focus_mode: directional_focus
+    loss_selected_node_weight: 1.20
+    loss_tail_horizon_weight: 1.90
+    loss_headroom_boost: 0.60
+  search_stages:
+    - name: global_stealth_probe_main
+      explicit_candidates:
+        - <<: *global_stealth_base
+          poison_ratio: 0.020
+          sigma_multiplier: 0.055
+          target_shift_ratio: 0.065
+          global_shift_fraction: 0.30
+          tail_focus_multiplier: 1.50
+          loss_selected_node_weight: 1.20
+          loss_tail_horizon_weight: 1.90
+          loss_headroom_boost: 0.60
+        - <<: *global_stealth_base
+          poison_ratio: 0.020
+          sigma_multiplier: 0.060
+          target_shift_ratio: 0.065
+          global_shift_fraction: 0.35
+          tail_focus_multiplier: 1.60
+          loss_selected_node_weight: 1.20
+          loss_tail_horizon_weight: 2.00
+          loss_headroom_boost: 0.70
+        - <<: *global_stealth_base
+          poison_ratio: 0.0225
+          sigma_multiplier: 0.055
+          target_shift_ratio: 0.070
+          global_shift_fraction: 0.35
+          tail_focus_multiplier: 1.70
+          loss_selected_node_weight: 1.25
+          loss_tail_horizon_weight: 2.10
+          loss_headroom_boost: 0.80
+        - <<: *global_stealth_base
+          poison_ratio: 0.0225
+          sigma_multiplier: 0.060
+          target_shift_ratio: 0.070
+          global_shift_fraction: 0.40
+          tail_focus_multiplier: 1.70
+          loss_selected_node_weight: 1.25
+          loss_tail_horizon_weight: 2.20
+          loss_headroom_boost: 0.90
+        - <<: *global_stealth_base
+          poison_ratio: 0.025
+          sigma_multiplier: 0.055
+          target_shift_ratio: 0.070
+          global_shift_fraction: 0.40
+          tail_focus_multiplier: 1.80
+          loss_selected_node_weight: 1.30
+          loss_tail_horizon_weight: 2.30
+          loss_headroom_boost: 1.00
+        - <<: *global_stealth_base
+          frequency_smoothing_strength: 0.35
+          spectral_constraint_strength: 0.20
+          poison_ratio: 0.0225
+          sigma_multiplier: 0.055
+          target_shift_ratio: 0.070
+          global_shift_fraction: 0.35
+          tail_focus_multiplier: 1.70
+          loss_selected_node_weight: 1.25
+          loss_tail_horizon_weight: 2.10
+          loss_headroom_boost: 0.80
+        - <<: *global_stealth_base
+          sample_selection_mode: hybrid_headroom_error
+          headroom_error_mix: 0.65
+          poison_ratio: 0.020
+          sigma_multiplier: 0.060
+          target_shift_ratio: 0.065
+          global_shift_fraction: 0.35
+          tail_focus_multiplier: 1.60
+          loss_selected_node_weight: 1.20
+          loss_tail_horizon_weight: 2.00
+          loss_headroom_boost: 0.70
+        - <<: *global_stealth_base
+          sample_selection_mode: hybrid_headroom_error
+          headroom_error_mix: 0.70
+          poison_ratio: 0.0225
+          sigma_multiplier: 0.055
+          target_shift_ratio: 0.070
+          global_shift_fraction: 0.40
+          tail_focus_multiplier: 1.80
+          loss_selected_node_weight: 1.30
+          loss_tail_horizon_weight: 2.30
+          loss_headroom_boost: 1.00
+
+defense:
+  zscore_threshold: 3.0
+  moving_average_window: 3
+  frequency_band_fraction: 0.25
+
+output:
+  root_dir: ../results

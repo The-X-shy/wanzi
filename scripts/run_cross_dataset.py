@@ -357,6 +357,8 @@ def evaluate_attack_candidate(
         loss_selected_node_weight=float(candidate.get("loss_selected_node_weight", config["poison"].get("loss_selected_node_weight", 1.15))),
         loss_tail_horizon_weight=float(candidate.get("loss_tail_horizon_weight", config["poison"].get("loss_tail_horizon_weight", 1.75))),
         loss_headroom_boost=float(candidate.get("loss_headroom_boost", config["poison"].get("loss_headroom_boost", 0.4))),
+        feature_scaler=bundle.scaler,
+        trigger_feature_std=bundle.feature_std,
     )
     poisoned_loader = make_loader(
         np.asarray(poisoned_train["poisoned_inputs"]),
@@ -403,6 +405,8 @@ def evaluate_attack_candidate(
         loss_selected_node_weight=float(candidate.get("loss_selected_node_weight", config["poison"].get("loss_selected_node_weight", 1.15))),
         loss_tail_horizon_weight=float(candidate.get("loss_tail_horizon_weight", config["poison"].get("loss_tail_horizon_weight", 1.75))),
         loss_headroom_boost=float(candidate.get("loss_headroom_boost", config["poison"].get("loss_headroom_boost", 0.4))),
+        feature_scaler=bundle.scaler,
+        trigger_feature_std=bundle.feature_std,
     )
     triggered_inputs = np.asarray(triggered_test["poisoned_inputs"])
     triggered_metrics, _, triggered_pred = evaluate_on_arrays(
@@ -471,7 +475,10 @@ def evaluate_attack_candidate(
         **{f"clean_{key}": float(value) for key, value in poisoned_clean_metrics.items()},
         **{f"triggered_{key}": float(value) for key, value in triggered_metrics.items()},
         **{f"clean_{key}": float(value) for key, value in clean_delta.items()},
-        "attack_success_rate": float(asr["attack_success_rate"]),
+        "attack_success_rate": float(eval_views["raw_global_attack_success_rate"]),
+        "scaled_attack_success_rate": float(asr["attack_success_rate"]),
+        "elementwise_attack_success_rate": float(eval_views["raw_global_elementwise_attack_success_rate"]),
+        "sample_all_attack_success_rate": float(eval_views["raw_global_sample_all_attack_success_rate"]),
         "tolerance_ratio": float(asr["tolerance_ratio"]),
         "local_forecast_error_mean": float(poisoned_train.get("local_forecast_error_mean", 0.0)),
         "global_forecast_error_mean": float(poisoned_train.get("global_forecast_error_mean", 0.0)),

@@ -83,6 +83,7 @@ def candidate_from_row(row: dict[str, Any]) -> dict[str, Any]:
         "frequency_smoothing_strength": float(row.get("frequency_smoothing_strength", 0.0)),
         "frequency_cutoff_ratio": float(row.get("frequency_cutoff_ratio", 0.5)),
         "frequency_decay": float(row.get("frequency_decay", 0.35)),
+        "spectral_constraint_strength": float(row.get("spectral_constraint_strength", 0.0)),
         "headroom_error_mix": float(row.get("headroom_error_mix", 0.6)),
         "global_shift_fraction": float(row.get("global_shift_fraction", 0.3)),
         "tail_focus_multiplier": float(row.get("tail_focus_multiplier", 1.6)),
@@ -142,6 +143,12 @@ def normalize_candidate(candidate: dict[str, Any], poison_cfg: dict[str, Any]) -
             candidate.get(
                 "frequency_decay",
                 poison_cfg.get("frequency_decays", [poison_cfg.get("frequency_decay", 0.35)])[0],
+            )
+        ),
+        "spectral_constraint_strength": float(
+            candidate.get(
+                "spectral_constraint_strength",
+                poison_cfg.get("spectral_constraint_strengths", [poison_cfg.get("spectral_constraint_strength", 0.0)])[0],
             )
         ),
         "headroom_error_mix": float(
@@ -206,6 +213,7 @@ def candidate_key(candidate: dict[str, Any]) -> str:
         "frequency_smoothing_strength": round(float(candidate["frequency_smoothing_strength"]), 8),
         "frequency_cutoff_ratio": round(float(candidate["frequency_cutoff_ratio"]), 8),
         "frequency_decay": round(float(candidate.get("frequency_decay", 0.35)), 8),
+        "spectral_constraint_strength": round(float(candidate.get("spectral_constraint_strength", 0.0)), 8),
         "headroom_error_mix": round(float(candidate.get("headroom_error_mix", 0.6)), 8),
         "global_shift_fraction": round(float(candidate.get("global_shift_fraction", 0.3)), 8),
         "tail_focus_multiplier": round(float(candidate.get("tail_focus_multiplier", 1.6)), 8),
@@ -255,6 +263,7 @@ def build_search_stages(poison_cfg: dict[str, Any]) -> list[dict[str, Any]]:
             ),
             "frequency_cutoff_ratios": poison_cfg.get("frequency_cutoff_ratios", [poison_cfg.get("frequency_cutoff_ratio", 0.5)]),
             "frequency_decays": poison_cfg.get("frequency_decays", [poison_cfg.get("frequency_decay", 0.35)]),
+            "spectral_constraint_strengths": poison_cfg.get("spectral_constraint_strengths", [poison_cfg.get("spectral_constraint_strength", 0.0)]),
             "headroom_error_mixes": poison_cfg.get("headroom_error_mixes", [poison_cfg.get("headroom_error_mix", 0.6)]),
             "global_shift_fractions": poison_cfg.get("global_shift_fractions", [poison_cfg.get("global_shift_fraction", 0.3)]),
             "tail_focus_multipliers": poison_cfg.get("tail_focus_multipliers", [poison_cfg.get("tail_focus_multiplier", 1.6)]),
@@ -423,6 +432,14 @@ def resolve_stage_candidates(
             "frequency_decay",
         )
     ]
+    spectral_constraint_strengths = [
+        float(value)
+        for value in resolve_values(
+            "spectral_constraint_strengths",
+            poison_cfg.get("spectral_constraint_strengths", [poison_cfg.get("spectral_constraint_strength", 0.0)]),
+            "spectral_constraint_strength",
+        )
+    ]
     headroom_error_mixes = [
         float(value)
         for value in resolve_values(
@@ -498,6 +515,7 @@ def resolve_stage_candidates(
         frequency_smoothing_strengths,
         frequency_cutoff_ratios,
         frequency_decays,
+        spectral_constraint_strengths,
         headroom_error_mixes,
         global_shift_fractions,
         tail_focus_multipliers,
@@ -522,13 +540,14 @@ def resolve_stage_candidates(
             "frequency_smoothing_strength": float(combo[12]),
             "frequency_cutoff_ratio": float(combo[13]),
             "frequency_decay": float(combo[14]),
-            "headroom_error_mix": float(combo[15]),
-            "global_shift_fraction": float(combo[16]),
-            "tail_focus_multiplier": float(combo[17]),
-            "loss_focus_mode": str(combo[18]),
-            "loss_selected_node_weight": float(combo[19]),
-            "loss_tail_horizon_weight": float(combo[20]),
-            "loss_headroom_boost": float(combo[21]),
+            "spectral_constraint_strength": float(combo[15]),
+            "headroom_error_mix": float(combo[16]),
+            "global_shift_fraction": float(combo[17]),
+            "tail_focus_multiplier": float(combo[18]),
+            "loss_focus_mode": str(combo[19]),
+            "loss_selected_node_weight": float(combo[20]),
+            "loss_tail_horizon_weight": float(combo[21]),
+            "loss_headroom_boost": float(combo[22]),
         }
         key = candidate_key(candidate)
         if key in seen:
@@ -628,6 +647,9 @@ def evaluate_attack_candidate(
         loss_selected_node_weight=float(candidate.get("loss_selected_node_weight", poison_cfg.get("loss_selected_node_weight", 1.15))),
         loss_tail_horizon_weight=float(candidate.get("loss_tail_horizon_weight", poison_cfg.get("loss_tail_horizon_weight", 1.75))),
         loss_headroom_boost=float(candidate.get("loss_headroom_boost", poison_cfg.get("loss_headroom_boost", 0.4))),
+        feature_scaler=bundle.scaler,
+        trigger_feature_std=bundle.feature_std,
+        spectral_constraint_strength=float(candidate.get("spectral_constraint_strength", poison_cfg.get("spectral_constraint_strength", 0.0))),
     )
 
     poisoned_loader = make_loader(
@@ -675,6 +697,9 @@ def evaluate_attack_candidate(
         loss_selected_node_weight=float(candidate.get("loss_selected_node_weight", poison_cfg.get("loss_selected_node_weight", 1.15))),
         loss_tail_horizon_weight=float(candidate.get("loss_tail_horizon_weight", poison_cfg.get("loss_tail_horizon_weight", 1.75))),
         loss_headroom_boost=float(candidate.get("loss_headroom_boost", poison_cfg.get("loss_headroom_boost", 0.4))),
+        feature_scaler=bundle.scaler,
+        trigger_feature_std=bundle.feature_std,
+        spectral_constraint_strength=float(candidate.get("spectral_constraint_strength", poison_cfg.get("spectral_constraint_strength", 0.0))),
     )
     triggered_inputs = np.asarray(triggered_test["poisoned_inputs"])
     triggered_metrics, _, triggered_pred = evaluate_on_arrays(
@@ -725,6 +750,7 @@ def evaluate_attack_candidate(
         "frequency_smoothing_strength": float(candidate["frequency_smoothing_strength"]),
         "frequency_cutoff_ratio": float(candidate["frequency_cutoff_ratio"]),
         "frequency_decay": float(candidate.get("frequency_decay", 0.35)),
+        "spectral_constraint_strength": float(candidate.get("spectral_constraint_strength", 0.0)),
         "headroom_error_mix": float(candidate.get("headroom_error_mix", 0.6)),
         "global_shift_fraction": float(candidate.get("global_shift_fraction", 0.3)),
         "tail_focus_multiplier": float(candidate.get("tail_focus_multiplier", 1.6)),
@@ -748,7 +774,10 @@ def evaluate_attack_candidate(
         **flatten_metrics("clean", clean_metrics),
         **flatten_metrics("triggered", triggered_metrics),
         **clean_deltas,
-        "attack_success_rate": float(asr_metrics["attack_success_rate"]),
+        "attack_success_rate": float(eval_views["raw_global_attack_success_rate"]),
+        "scaled_attack_success_rate": float(asr_metrics["attack_success_rate"]),
+        "elementwise_attack_success_rate": float(eval_views["raw_global_elementwise_attack_success_rate"]),
+        "sample_all_attack_success_rate": float(eval_views["raw_global_sample_all_attack_success_rate"]),
         "target_shift_ratio": float(asr_metrics["target_shift_ratio"]),
         "tolerance_ratio": float(asr_metrics["tolerance_ratio"]),
         **shift_metrics,
@@ -773,6 +802,7 @@ def evaluate_attack_candidate(
         "frequency_smoothing_strength": float(candidate["frequency_smoothing_strength"]),
         "frequency_cutoff_ratio": float(candidate["frequency_cutoff_ratio"]),
         "frequency_decay": float(candidate.get("frequency_decay", 0.35)),
+        "spectral_constraint_strength": float(candidate.get("spectral_constraint_strength", 0.0)),
         "headroom_error_mix": float(candidate.get("headroom_error_mix", 0.6)),
         "global_shift_fraction": float(candidate.get("global_shift_fraction", 0.3)),
         "tail_focus_multiplier": float(candidate.get("tail_focus_multiplier", 1.6)),
@@ -823,6 +853,7 @@ def summarize_recheck_rows(candidate_rows: list[dict[str, Any]]) -> dict[str, An
         "frequency_smoothing_strength": float(candidate_rows[0]["frequency_smoothing_strength"]),
         "frequency_cutoff_ratio": float(candidate_rows[0]["frequency_cutoff_ratio"]),
         "frequency_decay": float(candidate_rows[0].get("frequency_decay", 0.35)),
+        "spectral_constraint_strength": float(candidate_rows[0].get("spectral_constraint_strength", 0.0)),
         "headroom_error_mix": float(candidate_rows[0].get("headroom_error_mix", 0.6)),
         "global_shift_fraction": float(candidate_rows[0].get("global_shift_fraction", 0.3)),
         "tail_focus_multiplier": float(candidate_rows[0].get("tail_focus_multiplier", 1.6)),

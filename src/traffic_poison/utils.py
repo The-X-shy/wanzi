@@ -4,10 +4,42 @@ import json
 import random
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Tuple
 
 import numpy as np
+import pandas as pd
 import torch
+
+ArrayLike = Any
+
+
+def to_numpy(x: ArrayLike) -> np.ndarray:
+    """Convert array-like to numpy, handling torch tensors and pandas objects."""
+    if isinstance(x, np.ndarray):
+        return x
+    if torch.is_tensor(x):
+        return x.detach().cpu().numpy()
+    if isinstance(x, pd.DataFrame):
+        return x.to_numpy()
+    if isinstance(x, pd.Series):
+        return x.to_numpy()
+    return np.asarray(x)
+
+
+def to_tensor_like(x: np.ndarray, reference: ArrayLike) -> ArrayLike:
+    """Cast numpy array to the same type/device as reference if reference is a tensor."""
+    if torch.is_tensor(reference):
+        return torch.as_tensor(x, dtype=reference.dtype, device=reference.device)
+    return x
+
+
+def ensure_3d(x: np.ndarray) -> Tuple[np.ndarray, bool]:
+    """Ensure array is 3D; return (3d_array, was_squeezed)."""
+    if x.ndim == 2:
+        return x[None, ...], True
+    if x.ndim != 3:
+        raise ValueError(f"Expected 2D or 3D array, got shape {x.shape}")
+    return x, False
 
 
 def set_seed(seed: int) -> None:
