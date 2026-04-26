@@ -1,0 +1,57 @@
+experiment_name: metr_la_spatiotemporal_headroom_smoke
+seed: 42
+
+dataset:
+  name: METR-LA
+  data_path: ../data/metr-la.h5
+  data_key: df
+  adjacency_path: ../data/adj_mx.pkl
+  input_len: 12
+  horizon: 12
+  train_ratio: 0.7
+  val_ratio: 0.1
+  test_ratio: 0.2
+  batch_size: 64
+  num_workers: 0
+  fill_missing: true
+  scale: true
+  shuffle_train: false
+
+training:
+  hidden_size: 64
+  num_layers: 2
+  dropout: 0.1
+  lr: 0.001
+  weight_decay: 0.0
+  epochs: 4
+  patience: 2
+  loss: mae
+  device: cpu
+  repeats: 1
+  grad_clip_norm: 0.5
+
+poison:
+  trigger_steps: 3
+  trigger_node_count: 5
+  poison_ratios: [0.02]
+  sigma_multipliers: [0.08]
+  selection_strategies: [spatiotemporal_headroom]
+  sample_selection_mode: tail_headroom
+  sample_selection_modes: [tail_headroom]
+  target_shift_mode: additive_directional
+  target_shift_modes: [additive_directional]
+  target_horizon_mode: tail
+  target_horizon_modes: [tail]
+  target_horizon_count: 3
+  target_shift_ratio: 0.10
+  fallback_shift_ratio: 0.05
+  success_tolerance_ratio: 0.03
+  max_clean_mae_delta_ratio: 0.05
+
+defense:
+  zscore_threshold: 3.0
+  moving_average_window: 3
+  frequency_band_fraction: 0.25
+
+output:
+  root_dir: ../results

@@ -75,10 +75,13 @@ def candidate_from_row(row: dict[str, Any]) -> dict[str, Any]:
         "window_mode": str(row.get("window_mode", "tail")),
         "sample_selection_mode": str(row.get("sample_selection_mode", "input_energy")),
         "target_weight_mode": str(row.get("target_weight_mode", "flat")),
+        "target_shift_mode": str(row.get("target_shift_mode", "multiplicative")),
         "trigger_steps": int(row["trigger_steps"]),
         "trigger_node_count": int(row.get("trigger_node_count", 5)),
+        "trigger_scope_node_count": int(row.get("trigger_scope_node_count", row.get("trigger_node_count", 5))),
         "target_horizon_mode": str(row.get("target_horizon_mode", "all")),
         "target_horizon_count": int(row.get("target_horizon_count", 3)),
+        "target_region_loss_weight": float(row.get("target_region_loss_weight", 1.0)),
         "time_smoothing_kernel": int(row.get("time_smoothing_kernel", 3)),
         "frequency_smoothing_strength": float(row.get("frequency_smoothing_strength", 0.0)),
         "frequency_cutoff_ratio": float(row.get("frequency_cutoff_ratio", 0.5)),
@@ -118,12 +121,27 @@ def normalize_candidate(candidate: dict[str, Any], poison_cfg: dict[str, Any]) -
                 poison_cfg.get("target_weight_modes", [poison_cfg.get("target_weight_mode", "flat")])[0],
             )
         ),
+        "target_shift_mode": str(
+            candidate.get(
+                "target_shift_mode",
+                poison_cfg.get("target_shift_modes", [poison_cfg.get("target_shift_mode", "multiplicative")])[0],
+            )
+        ),
         "trigger_steps": int(candidate.get("trigger_steps", poison_cfg.get("trigger_steps", 3))),
         "trigger_node_count": int(candidate.get("trigger_node_count", poison_cfg.get("trigger_node_count", 5))),
+        "trigger_scope_node_count": int(
+            candidate.get("trigger_scope_node_count", poison_cfg.get("trigger_scope_node_count", candidate.get("trigger_node_count", poison_cfg.get("trigger_node_count", 5))))
+        ),
         "target_horizon_mode": str(
             candidate.get("target_horizon_mode", poison_cfg.get("target_horizon_modes", [poison_cfg.get("target_horizon_mode", "all")])[0])
         ),
         "target_horizon_count": int(candidate.get("target_horizon_count", poison_cfg.get("target_horizon_count", 3))),
+        "target_region_loss_weight": float(
+            candidate.get(
+                "target_region_loss_weight",
+                poison_cfg.get("target_region_loss_weights", [poison_cfg.get("target_region_loss_weight", 1.0)])[0],
+            )
+        ),
         "time_smoothing_kernel": int(
             candidate.get("time_smoothing_kernel", poison_cfg.get("time_smoothing_kernels", [poison_cfg.get("time_smoothing_kernel", 3)])[0])
         ),
@@ -205,10 +223,13 @@ def candidate_key(candidate: dict[str, Any]) -> str:
         "window_mode": str(candidate["window_mode"]),
         "sample_selection_mode": str(candidate["sample_selection_mode"]),
         "target_weight_mode": str(candidate["target_weight_mode"]),
+        "target_shift_mode": str(candidate.get("target_shift_mode", "multiplicative")),
         "trigger_steps": int(candidate["trigger_steps"]),
         "trigger_node_count": int(candidate["trigger_node_count"]),
+        "trigger_scope_node_count": int(candidate.get("trigger_scope_node_count", candidate["trigger_node_count"])),
         "target_horizon_mode": str(candidate["target_horizon_mode"]),
         "target_horizon_count": int(candidate["target_horizon_count"]),
+        "target_region_loss_weight": round(float(candidate.get("target_region_loss_weight", 1.0)), 8),
         "time_smoothing_kernel": int(candidate["time_smoothing_kernel"]),
         "frequency_smoothing_strength": round(float(candidate["frequency_smoothing_strength"]), 8),
         "frequency_cutoff_ratio": round(float(candidate["frequency_cutoff_ratio"]), 8),
@@ -252,10 +273,16 @@ def build_search_stages(poison_cfg: dict[str, Any]) -> list[dict[str, Any]]:
                 "target_weight_modes",
                 [poison_cfg.get("target_weight_mode", "flat")],
             ),
+            "target_shift_modes": poison_cfg.get("target_shift_modes", [poison_cfg.get("target_shift_mode", "multiplicative")]),
             "trigger_steps": poison_cfg.get("trigger_steps", 3),
             "trigger_node_count": poison_cfg.get("trigger_node_count", 5),
+            "trigger_scope_node_count": poison_cfg.get("trigger_scope_node_count", poison_cfg.get("trigger_node_count", 5)),
             "target_horizon_modes": poison_cfg.get("target_horizon_modes", [poison_cfg.get("target_horizon_mode", "all")]),
             "target_horizon_count": poison_cfg.get("target_horizon_count", 3),
+            "target_region_loss_weights": poison_cfg.get(
+                "target_region_loss_weights",
+                [poison_cfg.get("target_region_loss_weight", 1.0)],
+            ),
             "time_smoothing_kernels": poison_cfg.get("time_smoothing_kernels", [poison_cfg.get("time_smoothing_kernel", 3)]),
             "frequency_smoothing_strengths": poison_cfg.get(
                 "frequency_smoothing_strengths",
@@ -376,6 +403,14 @@ def resolve_stage_candidates(
             "target_weight_mode",
         )
     ]
+    target_shift_modes = [
+        str(value)
+        for value in resolve_values(
+            "target_shift_modes",
+            poison_cfg.get("target_shift_modes", [poison_cfg.get("target_shift_mode", "multiplicative")]),
+            "target_shift_mode",
+        )
+    ]
     trigger_steps = [
         int(value)
         for value in resolve_values("trigger_steps", poison_cfg.get("trigger_steps", 3), "trigger_steps")
@@ -383,6 +418,14 @@ def resolve_stage_candidates(
     trigger_node_count = [
         int(value)
         for value in resolve_values("trigger_node_count", poison_cfg.get("trigger_node_count", 5), "trigger_node_count")
+    ]
+    trigger_scope_node_count = [
+        int(value)
+        for value in resolve_values(
+            "trigger_scope_node_count",
+            poison_cfg.get("trigger_scope_node_count", poison_cfg.get("trigger_node_count", 5)),
+            "trigger_scope_node_count",
+        )
     ]
     target_horizon_modes = [
         str(value)
@@ -398,6 +441,14 @@ def resolve_stage_candidates(
             "target_horizon_count",
             poison_cfg.get("target_horizon_count", 3),
             "target_horizon_count",
+        )
+    ]
+    target_region_loss_weights = [
+        float(value)
+        for value in resolve_values(
+            "target_region_loss_weights",
+            poison_cfg.get("target_region_loss_weights", [poison_cfg.get("target_region_loss_weight", 1.0)]),
+            "target_region_loss_weight",
         )
     ]
     time_smoothing_kernels = [
@@ -507,10 +558,13 @@ def resolve_stage_candidates(
         window_modes,
         sample_selection_modes,
         target_weight_modes,
+        target_shift_modes,
         trigger_steps,
         trigger_node_count,
+        trigger_scope_node_count,
         target_horizon_modes,
         target_horizon_count,
+        target_region_loss_weights,
         time_smoothing_kernels,
         frequency_smoothing_strengths,
         frequency_cutoff_ratios,
@@ -532,22 +586,25 @@ def resolve_stage_candidates(
             "window_mode": combo[4],
             "sample_selection_mode": combo[5],
             "target_weight_mode": combo[6],
-            "trigger_steps": int(combo[7]),
-            "trigger_node_count": int(combo[8]),
-            "target_horizon_mode": combo[9],
-            "target_horizon_count": int(combo[10]),
-            "time_smoothing_kernel": int(combo[11]),
-            "frequency_smoothing_strength": float(combo[12]),
-            "frequency_cutoff_ratio": float(combo[13]),
-            "frequency_decay": float(combo[14]),
-            "spectral_constraint_strength": float(combo[15]),
-            "headroom_error_mix": float(combo[16]),
-            "global_shift_fraction": float(combo[17]),
-            "tail_focus_multiplier": float(combo[18]),
-            "loss_focus_mode": str(combo[19]),
-            "loss_selected_node_weight": float(combo[20]),
-            "loss_tail_horizon_weight": float(combo[21]),
-            "loss_headroom_boost": float(combo[22]),
+            "target_shift_mode": combo[7],
+            "trigger_steps": int(combo[8]),
+            "trigger_node_count": int(combo[9]),
+            "trigger_scope_node_count": int(combo[10]),
+            "target_horizon_mode": combo[11],
+            "target_horizon_count": int(combo[12]),
+            "target_region_loss_weight": float(combo[13]),
+            "time_smoothing_kernel": int(combo[14]),
+            "frequency_smoothing_strength": float(combo[15]),
+            "frequency_cutoff_ratio": float(combo[16]),
+            "frequency_decay": float(combo[17]),
+            "spectral_constraint_strength": float(combo[18]),
+            "headroom_error_mix": float(combo[19]),
+            "global_shift_fraction": float(combo[20]),
+            "tail_focus_multiplier": float(combo[21]),
+            "loss_focus_mode": str(combo[22]),
+            "loss_selected_node_weight": float(combo[23]),
+            "loss_tail_horizon_weight": float(combo[24]),
+            "loss_headroom_boost": float(combo[25]),
         }
         key = candidate_key(candidate)
         if key in seen:
@@ -600,13 +657,14 @@ def evaluate_attack_candidate(
     target_horizon_offset = int(poison_cfg.get("target_horizon_offset", 0))
 
     set_seed(seed)
+    ranking_node_count = max(int(candidate["trigger_node_count"]), int(candidate.get("trigger_scope_node_count", candidate["trigger_node_count"])))
     ranking = rank_vulnerable_positions(
         bundle.train_inputs,
         bundle.train_targets,
         clean_train_pred,
         bundle.adjacency,
         candidate["selection_strategy"],
-        int(candidate["trigger_node_count"]),
+        ranking_node_count,
         int(candidate["trigger_steps"]),
         target_horizon_count=int(candidate["target_horizon_count"]),
         target_horizon_mode=str(candidate["target_horizon_mode"]),
@@ -632,6 +690,7 @@ def evaluate_attack_candidate(
         target_horizon_indices=ranking.get("target_horizon_indices"),
         clean_predictions=clean_train_pred,
         target_weight_mode=str(candidate["target_weight_mode"]),
+        target_shift_mode=str(candidate.get("target_shift_mode", "multiplicative")),
         node_rank_weights=poison_cfg.get("node_rank_weights"),
         tail_horizon_weights=poison_cfg.get("tail_horizon_weights"),
         selection_tail_horizon_count=int(poison_cfg.get("evaluation_tail_horizon_count", 3)),
@@ -650,6 +709,9 @@ def evaluate_attack_candidate(
         feature_scaler=bundle.scaler,
         trigger_feature_std=bundle.feature_std,
         spectral_constraint_strength=float(candidate.get("spectral_constraint_strength", poison_cfg.get("spectral_constraint_strength", 0.0))),
+        target_region_loss_weight=float(candidate.get("target_region_loss_weight", poison_cfg.get("target_region_loss_weight", 1.0))),
+        trigger_scope_node_count=int(candidate.get("trigger_scope_node_count", candidate["trigger_node_count"])),
+        target_node_count=int(candidate["trigger_node_count"]),
     )
 
     poisoned_loader = make_loader(
@@ -682,6 +744,7 @@ def evaluate_attack_candidate(
         target_horizon_count=int(candidate["target_horizon_count"]),
         target_horizon_indices=ranking.get("target_horizon_indices"),
         target_weight_mode=str(candidate["target_weight_mode"]),
+        target_shift_mode=str(candidate.get("target_shift_mode", "multiplicative")),
         node_rank_weights=poison_cfg.get("node_rank_weights"),
         tail_horizon_weights=poison_cfg.get("tail_horizon_weights"),
         selection_tail_horizon_count=int(poison_cfg.get("evaluation_tail_horizon_count", 3)),
@@ -700,6 +763,9 @@ def evaluate_attack_candidate(
         feature_scaler=bundle.scaler,
         trigger_feature_std=bundle.feature_std,
         spectral_constraint_strength=float(candidate.get("spectral_constraint_strength", poison_cfg.get("spectral_constraint_strength", 0.0))),
+        target_region_loss_weight=float(candidate.get("target_region_loss_weight", poison_cfg.get("target_region_loss_weight", 1.0))),
+        trigger_scope_node_count=int(candidate.get("trigger_scope_node_count", candidate["trigger_node_count"])),
+        target_node_count=int(candidate["trigger_node_count"]),
     )
     triggered_inputs = np.asarray(triggered_test["poisoned_inputs"])
     triggered_metrics, _, triggered_pred = evaluate_on_arrays(
@@ -742,10 +808,13 @@ def evaluate_attack_candidate(
         "window_mode": str(candidate["window_mode"]),
         "sample_selection_mode": str(candidate["sample_selection_mode"]),
         "target_weight_mode": str(candidate["target_weight_mode"]),
+        "target_shift_mode": str(candidate.get("target_shift_mode", "multiplicative")),
         "trigger_steps": int(candidate["trigger_steps"]),
         "trigger_node_count": int(candidate["trigger_node_count"]),
+        "trigger_scope_node_count": int(candidate.get("trigger_scope_node_count", candidate["trigger_node_count"])),
         "target_horizon_mode": str(candidate["target_horizon_mode"]),
         "target_horizon_count": int(candidate["target_horizon_count"]),
+        "target_region_loss_weight": float(candidate.get("target_region_loss_weight", 1.0)),
         "time_smoothing_kernel": int(candidate["time_smoothing_kernel"]),
         "frequency_smoothing_strength": float(candidate["frequency_smoothing_strength"]),
         "frequency_cutoff_ratio": float(candidate["frequency_cutoff_ratio"]),
@@ -794,10 +863,13 @@ def evaluate_attack_candidate(
         "window_mode": str(candidate["window_mode"]),
         "sample_selection_mode": str(candidate["sample_selection_mode"]),
         "target_weight_mode": str(candidate["target_weight_mode"]),
+        "target_shift_mode": str(candidate.get("target_shift_mode", "multiplicative")),
         "trigger_steps": int(candidate["trigger_steps"]),
         "trigger_node_count": int(candidate["trigger_node_count"]),
+        "trigger_scope_node_count": int(candidate.get("trigger_scope_node_count", candidate["trigger_node_count"])),
         "target_horizon_mode": str(candidate["target_horizon_mode"]),
         "target_horizon_count": int(candidate["target_horizon_count"]),
+        "target_region_loss_weight": float(candidate.get("target_region_loss_weight", 1.0)),
         "time_smoothing_kernel": int(candidate["time_smoothing_kernel"]),
         "frequency_smoothing_strength": float(candidate["frequency_smoothing_strength"]),
         "frequency_cutoff_ratio": float(candidate["frequency_cutoff_ratio"]),
@@ -844,11 +916,14 @@ def summarize_recheck_rows(candidate_rows: list[dict[str, Any]]) -> dict[str, An
         "window_mode": str(candidate_rows[0]["window_mode"]),
         "sample_selection_mode": str(candidate_rows[0].get("sample_selection_mode", "input_energy")),
         "target_weight_mode": str(candidate_rows[0].get("target_weight_mode", "flat")),
+        "target_shift_mode": str(candidate_rows[0].get("target_shift_mode", "multiplicative")),
         "trigger_steps": int(candidate_rows[0]["trigger_steps"]),
         "trigger_node_count": int(candidate_rows[0]["trigger_node_count"]),
+        "trigger_scope_node_count": int(candidate_rows[0].get("trigger_scope_node_count", candidate_rows[0]["trigger_node_count"])),
         "target_shift_ratio": float(candidate_rows[0]["target_shift_ratio"]),
         "target_horizon_mode": str(candidate_rows[0]["target_horizon_mode"]),
         "target_horizon_count": int(candidate_rows[0]["target_horizon_count"]),
+        "target_region_loss_weight": float(candidate_rows[0].get("target_region_loss_weight", 1.0)),
         "time_smoothing_kernel": int(candidate_rows[0]["time_smoothing_kernel"]),
         "frequency_smoothing_strength": float(candidate_rows[0]["frequency_smoothing_strength"]),
         "frequency_cutoff_ratio": float(candidate_rows[0]["frequency_cutoff_ratio"]),
@@ -875,6 +950,7 @@ def summarize_recheck_rows(candidate_rows: list[dict[str, Any]]) -> dict[str, An
         "window_mode",
         "sample_selection_mode",
         "target_weight_mode",
+        "target_shift_mode",
         "loss_focus_mode",
         "target_horizon_mode",
         "selected_nodes",

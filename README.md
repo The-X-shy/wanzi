@@ -12,6 +12,7 @@
 - 补充验证数据集：`PEMS-BAY`
 - 主攻击设定：`error` 节点排序、`hybrid` 触发窗口、3 个触发节点、3 个触发时间步
 - 主优化策略：`directional_headroom` 样本选择、`dual_focus` 目标塑形、`directional_focus` 训练权重
+- 新增策略：`spatiotemporal_headroom` 时空脆弱位置感知排序，综合预测误差、节点波动和路网中心性，并支持尾部预测步聚焦
 
 当前主实验已经达到最低论文标准。最佳主结果位于：
 
@@ -132,6 +133,26 @@ results/metr_la_clean_20260405_025213
 | `best_attack.json` | 默认指向论文候选 |
 
 在当前主结果中，原始最强候选和论文候选是同一组。
+
+### 3.6 时空脆弱位置感知优化
+
+该优化延续开题报告和中期报告中的原技术路线：数据预处理、滑动窗口、`LSTM` 基线、训练期后门投毒和多指标评估均保持不变，只增强“脆弱节点、脆弱时间窗口和目标区域偏移稳定性”。
+
+新增 `spatiotemporal_headroom` 策略，节点排序由三类信息共同决定：
+
+- 干净模型预测误差：权重 0.45；
+- 节点时间波动：权重 0.30；
+- 路网邻接中心性：权重 0.25。
+
+配套新增 `tail_headroom` 样本选择模式，优先选择目标区域仍有下调空间且不过于异常的样本。目标塑形支持 `additive_directional`，可只对目标节点和尾部预测步做定向偏移；同时通过 `trigger_scope_node_count` 扩大触发覆盖范围，使触发信号强度和目标节点范围可以分开控制。
+
+当前相关配置包括：
+
+| 配置 | 用途 |
+| --- | --- |
+| `configs/metr_la_spatiotemporal_headroom.yaml` | 初始正式配置 |
+| `configs/metr_la_spatiotemporal_headroom_smoke.yaml` | 快速验证配置 |
+| `configs/metr_la_spatiotemporal_headroom_v9.yaml` | 当前较优配置 |
 
 ---
 
@@ -316,6 +337,9 @@ wanzi/
 | `configs/metr_la_opt_spread_recovery.yaml` | 范围恢复方向 |
 | `configs/metr_la_opt_global_stealth_probe.yaml` | 2026-04-25 全局与隐蔽性探针 |
 | `configs/metr_la_opt_tail_directional.yaml` | 2026-04-25 tail 触发探针 |
+| `configs/metr_la_spatiotemporal_headroom.yaml` | 时空脆弱位置感知初始配置 |
+| `configs/metr_la_spatiotemporal_headroom_v9.yaml` | 时空脆弱位置感知较优配置 |
+| `configs/metr_la_spatiotemporal_headroom_smoke.yaml` | 时空脆弱位置感知快速验证 |
 | `configs/pems_bay_paper_optimization.yaml` | `PEMS-BAY` 跨数据集验证 |
 | `configs/*_smoke.yaml` | 快速检查配置 |
 
@@ -509,4 +533,3 @@ D:\ProgramData\Anaconda3\envs\wanzi310\python.exe scripts\run_poison_experiments
 3. `scripts/run_poison_experiments.py`
 4. `results/metr_la_poison_20260409_163212/search_summary.json`
 5. `results/thesis_tables_20260409_165255/thesis_summary.md`
-

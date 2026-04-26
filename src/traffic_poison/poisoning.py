@@ -1132,9 +1132,10 @@ def rank_vulnerable_positions(
     x, _ = _ensure_3d(x)
     trigger_steps = max(1, min(int(trigger_steps), x.shape[1]))
     analysis_window = max(2, min(x.shape[1], max(trigger_steps * 2, trigger_steps + 1, x.shape[1] // 2)))
+    base_strategy = "error" if strategy == "spatiotemporal_headroom" else strategy
     base_report = score_vulnerable_windows(
         x,
-        strategy=strategy,
+        strategy=base_strategy,
         top_k=max(trigger_node_count, trigger_steps * 2, 5),
         window_size=analysis_window,
         prediction_horizon=max(1, min(trigger_steps, x.shape[1] - 1)),
@@ -1150,15 +1151,36 @@ def rank_vulnerable_positions(
         target, _ = _ensure_3d(target)
         per_node_error = np.mean(np.abs(pred - target), axis=(0, 1))
         per_horizon_error = np.mean(np.abs(pred - target), axis=(0, 2))
-        node_scores = 0.5 * base_report["node_scores"] + 0.5 * per_node_error
+        if strategy == "spatiotemporal_headroom":
+            node_error = per_node_error
+        else:
+            node_scores = 0.5 * base_report["node_scores"] + 0.5 * per_node_error
     elif train_targets is not None:
         target = _to_numpy(train_targets)
         target, _ = _ensure_3d(target)
-        node_scores = np.mean(np.abs(x - target), axis=(0, 1))
+        node_error = np.mean(np.abs(x - target), axis=(0, 1))
+        node_scores = node_error
         per_horizon_error = np.mean(np.abs(target - np.mean(target, axis=(0, 2), keepdims=True)), axis=(0, 2))
     else:
-        node_scores = base_report["node_scores"]
+        node_error = base_report["node_scores"]
+        node_scores = node_error
         per_horizon_error = np.linspace(0.0, 1.0, x.shape[1], dtype=np.float64)
+
+    if strategy == "spatiotemporal_headroom":
+        volatility = np.mean(np.abs(np.diff(x, axis=1)), axis=(0, 1)) if x.shape[1] > 1 else np.zeros(x.shape[2], dtype=np.float64)
+        if adjacency is not None:
+            adj = _to_numpy(adjacency).astype(np.float64, copy=False)
+            if adj.ndim == 2 and adj.shape[0] == x.shape[2] and adj.shape[1] == x.shape[2]:
+                centrality = np.sum(np.abs(adj), axis=1)
+            else:
+                centrality = np.zeros(x.shape[2], dtype=np.float64)
+        else:
+            centrality = np.zeros(x.shape[2], dtype=np.float64)
+        node_scores = (
+            0.45 * _minmax_normalize(node_error)
+            + 0.30 * _minmax_normalize(volatility)
+            + 0.25 * _minmax_normalize(centrality)
+        )
 
     target_horizon_len = int(target.shape[1]) if train_targets is not None or clean_predictions is not None else int(x.shape[1])
     ranked_nodes = np.argsort(-node_scores)[:trigger_node_count].tolist()
@@ -1206,6 +1228,7 @@ def build_poisoned_training_set(
     target_horizon_indices: Optional[Sequence[int]] = None,
     clean_predictions: ArrayLike | None = None,
     target_weight_mode: str = "flat",
+    target_shift_mode: str = "multiplicative",
     node_rank_weights: Sequence[float] | np.ndarray | None = None,
     tail_horizon_weights: Sequence[float] | np.ndarray | None = None,
     selection_tail_horizon_count: int = 3,
@@ -1224,6 +1247,9 @@ def build_poisoned_training_set(
     feature_scaler: Any | None = None,
     trigger_feature_std: ArrayLike | None = None,
     spectral_constraint_strength: float = 0.0,
+    target_region_loss_weight: float = 1.0,
+    trigger_scope_node_count: int | None = None,
+    target_node_count: int | None = None,
 ) -> Dict[str, Any]:
     """Build poisoned training inputs and shifted targets.
 
@@ -1239,9 +1265,17 @@ def build_poisoned_training_set(
 
     n = inputs.shape[0]
     poison_n = max(1, int(round(n * poison_ratio)))
-    selected = np.array(ranked_nodes[: min(len(ranked_nodes), inputs.shape[2])], dtype=int)
+    requested_target_count = target_node_count if target_node_count is not None else len(ranked_nodes)
+    requested_target_count = max(1, min(int(requested_target_count), len(ranked_nodes), inputs.shape[2]))
+    target_selected = np.array(ranked_nodes[:requested_target_count], dtype=int)
+    if target_selected.size == 0:
+        target_selected = np.arange(min(inputs.shape[2], 5), dtype=int)
+
+    requested_trigger_count = trigger_scope_node_count if trigger_scope_node_count is not None else target_selected.size
+    requested_trigger_count = max(1, min(int(requested_trigger_count), len(ranked_nodes), inputs.shape[2]))
+    selected = np.array(ranked_nodes[:requested_trigger_count], dtype=int)
     if selected.size == 0:
-        selected = np.arange(min(inputs.shape[2], 5), dtype=int)
+        selected = target_selected
 
     selected_time_indices = _resolve_trigger_time_indices(
         inputs.shape[1],
@@ -1264,7 +1298,7 @@ def build_poisoned_training_set(
         selection_tail_horizon_count,
         "tail",
     )
-    selected_node_indices = _sanitize_indices(selected, targets.shape[2])
+    selected_node_indices = _sanitize_indices(target_selected, targets.shape[2])
     input_energy_scores = np.mean(np.abs(inputs[:, selected_time_indices, :][:, :, selected_node_indices]), axis=(1, 2))
 
     local_forecast_error = np.zeros(n, dtype=np.float64)
@@ -1307,6 +1341,20 @@ def build_poisoned_training_set(
             sample_scores = input_energy_scores
     elif sample_selection_mode == "directional_headroom":
         sample_scores = positive_headroom_ratio if clean_predictions is not None else input_energy_scores
+    elif sample_selection_mode == "tail_headroom":
+        tail_region = _select_prediction_region(
+            targets,
+            node_indices=selected_node_indices,
+            horizon_indices=selection_tail_indices,
+        )
+        tail_mean = np.mean(tail_region, axis=(1, 2))
+        median = float(np.median(tail_mean))
+        spread = float(np.median(np.abs(tail_mean - median))) + 1e-8
+        median_proximity = 1.0 / (1.0 + np.abs(tail_mean - median) / spread)
+        if clean_predictions is not None:
+            sample_scores = 0.65 * _minmax_normalize(positive_headroom_ratio) + 0.35 * _minmax_normalize(median_proximity)
+        else:
+            sample_scores = median_proximity
     elif sample_selection_mode == "hybrid_headroom_error":
         if clean_predictions is not None:
             mix = float(np.clip(headroom_error_mix, 0.0, 1.0))
@@ -1341,7 +1389,7 @@ def build_poisoned_training_set(
 
     resolved_node_weights = _resolve_rank_weights(
         node_rank_weights,
-        count=selected.size,
+        count=selected_node_indices.size,
         default=[1.0, 0.85, 0.7],
     )
     resolved_horizon_weights = _resolve_rank_weights(
@@ -1369,10 +1417,12 @@ def build_poisoned_training_set(
             spectral_constraint_strength=spectral_constraint_strength,
             random_state=int(idx),
         )
-        if applied_target_horizon_indices.size == 0:
+        if target_shift_mode == "additive_directional" and applied_target_horizon_indices.size > 0:
+            poisoned_targets[idx][np.ix_(applied_target_horizon_indices, selected_node_indices)] -= abs(effective_shift)
+        elif applied_target_horizon_indices.size == 0:
             adjusted_raw_target = _apply_target_shift(
                 raw_targets[idx],
-                selected_nodes=selected,
+                selected_nodes=selected_node_indices,
                 horizon_indices=applied_target_horizon_indices,
                 target_weight_mode=target_weight_mode,
                 effective_shift=effective_shift,
@@ -1385,7 +1435,7 @@ def build_poisoned_training_set(
         else:
             adjusted_raw_target = _apply_target_shift(
                 raw_targets[idx],
-                selected_nodes=selected,
+                selected_nodes=selected_node_indices,
                 horizon_indices=applied_target_horizon_indices,
                 target_weight_mode=target_weight_mode,
                 effective_shift=effective_shift,
@@ -1395,16 +1445,18 @@ def build_poisoned_training_set(
                 tail_focus_multiplier=tail_focus_multiplier,
             )
             poisoned_targets[idx] = _transform_feature_space(adjusted_raw_target[None, ...], feature_scaler)[0]
+        sample_weight = poisoned_loss_weights[idx]
+        if applied_target_horizon_indices.size > 0 and target_region_loss_weight > 1.0:
+            sample_weight[np.ix_(applied_target_horizon_indices, selected_node_indices)] *= float(target_region_loss_weight)
         if loss_focus_mode == "uniform":
             continue
         if loss_focus_mode != "directional_focus":
             raise ValueError(f"Unknown loss_focus_mode: {loss_focus_mode}")
-        sample_weight = poisoned_loss_weights[idx]
-        sample_weight[:, selected] *= max(1.0, float(loss_selected_node_weight))
+        sample_weight[:, selected_node_indices] *= max(1.0, float(loss_selected_node_weight))
         if selection_tail_indices.size > 0:
             sample_headroom = float(max(positive_headroom_ratio[idx], 0.0))
             headroom_scale = 1.0 + max(0.0, float(loss_headroom_boost)) * sample_headroom
-            sample_weight[selection_tail_indices[:, None], selected] *= max(1.0, float(loss_tail_horizon_weight)) * headroom_scale
+            sample_weight[np.ix_(selection_tail_indices, selected_node_indices)] *= max(1.0, float(loss_tail_horizon_weight)) * headroom_scale
 
     if squeezed:
         poisoned_inputs = poisoned_inputs[0]
@@ -1427,7 +1479,7 @@ def build_poisoned_training_set(
         "poisoned_targets": _to_tensor_like(poisoned_targets, train_targets),
         "poisoned_loss_weights": _to_tensor_like(poisoned_loss_weights, train_targets),
         "poisoned_indices": poisoned_indices.tolist(),
-        "selected_nodes": selected.tolist(),
+        "selected_nodes": selected_node_indices.astype(int).tolist(),
         "selected_time_indices": selected_time_indices.astype(int).tolist(),
         "selected_target_horizon_indices": applied_target_horizon_indices.astype(int).tolist(),
         "trigger_steps": trigger_steps,
@@ -1437,6 +1489,7 @@ def build_poisoned_training_set(
         "fallback_shift_ratio": fallback_shift_ratio,
         "sample_selection_mode": sample_selection_mode,
         "target_weight_mode": target_weight_mode,
+        "target_shift_mode": target_shift_mode,
         "window_mode": window_mode,
         "target_horizon_mode": target_horizon_mode,
         "target_horizon_count": int(min(max(1, target_horizon_count), targets.shape[1])),
@@ -1453,6 +1506,9 @@ def build_poisoned_training_set(
         "loss_selected_node_weight": float(max(1.0, loss_selected_node_weight)),
         "loss_tail_horizon_weight": float(max(1.0, loss_tail_horizon_weight)),
         "loss_headroom_boost": float(max(0.0, loss_headroom_boost)),
+        "target_region_loss_weight": float(max(1.0, target_region_loss_weight)),
+        "trigger_scope_node_count": int(selected.size),
+        "target_node_count": int(selected_node_indices.size),
         "node_rank_weights": resolved_node_weights.astype(np.float64).tolist(),
         "tail_horizon_weights": resolved_horizon_weights.astype(np.float64).tolist(),
         "local_forecast_error_mean": local_forecast_error_mean,
