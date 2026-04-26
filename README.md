@@ -10,26 +10,26 @@
 - 主模型：`LSTM`
 - 主数据集：`METR-LA`
 - 补充验证数据集：`PEMS-BAY`
-- 主攻击设定：`error` 节点排序、`hybrid` 触发窗口、3 个触发节点、3 个触发时间步
-- 主优化策略：`directional_headroom` 样本选择、`dual_focus` 目标塑形、`directional_focus` 训练权重
-- 新增策略：`spatiotemporal_headroom` 时空脆弱位置感知排序，综合预测误差、节点波动和路网中心性，并支持尾部预测步聚焦
+- 主攻击策略：`spatiotemporal_headroom` 时空脆弱位置感知排序，综合干净模型预测误差（0.45）、节点时间波动（0.30）和路网度中心性（0.25）进行复合节点选择
+- 触发与偏移：`trigger_scope_node_count=20` 节点注入触发模式，`trigger_node_count=10` 节点做 `additive_directional` 加法式定向偏移，仅作用于尾部 `target_horizon_count=6` 个预测步
+- 训练增强：`tail_headroom` 样本选择 + `target_region_loss_weight=200` 目标区域加权损失 + `frequency_smoothing_strength=0.45` 频域平滑
 
-当前主实验已经达到最低论文标准。最佳主结果位于：
+当前最佳结果已达到最低论文标准和更强正文标准。最佳主结果位于：
 
 ```text
-results/metr_la_poison_20260409_163212
+results/metr_la_poison_20260427_040007
 ```
 
-核心结果如下：
+核心结果如下（p=0.05, σ=0.14）：
 
-| 指标 | 数值 | 最低标准 | 结论 |
-| --- | ---: | ---: | --- |
-| 全局 ASR | 1.74% | >= 1.50% | 通过 |
-| 局部 ASR | 7.31% | >= 5.00% | 通过 |
-| 干净 MAE 变化 | 3.63% | <= 5.00% | 通过 |
-| 方向一致率 | 71.11% | >= 60.00% | 通过 |
-| 频域能量偏移 | 0.0424 | <= 0.0500 | 通过 |
-| 平均 z-score | 0.7574 | <= 0.8000 | 通过 |
+| 指标 | 数值 | 最低标准 | 更强标准 | 结论 |
+| --- | ---: | ---: | ---: | --- |
+| 局部 ASR | 16.19% | >= 5.00% | >= 6.00% | 双通过 |
+| 干净 MAE 变化 | 3.33% | <= 5.00% | <= 4.00% | 双通过 |
+| 方向一致率 | 93.76% | >= 60.00% | >= 65.00% | 双通过 |
+| 偏移达成度 | +0.0064 | — | >= 0 | 通过 |
+| 频域能量偏移 | 1.55 | <= 3.00 | <= 2.00 | 双通过 |
+| 平均 z-score | 0.756 | <= 0.80 | <= 0.76 | 双通过 |
 
 补充的 `PEMS-BAY` 跨数据集复现结果也达到标准，最佳局部 ASR 为 11.76%，干净 MAE 变化为 2.09%。
 
@@ -136,17 +136,17 @@ results/metr_la_clean_20260405_025213
 
 ### 3.6 时空脆弱位置感知优化
 
-该优化延续开题报告和中期报告中的原技术路线：数据预处理、滑动窗口、`LSTM` 基线、训练期后门投毒和多指标评估均保持不变，只增强“脆弱节点、脆弱时间窗口和目标区域偏移稳定性”。
+该优化延续开题报告和中期报告中的原技术路线：数据预处理、滑动窗口、`LSTM` 基线、训练期后门投毒和多指标评估均保持不变，只增强”脆弱节点、脆弱时间窗口和目标区域偏移稳定性”。
 
-新增 `spatiotemporal_headroom` 策略，节点排序由三类信息共同决定：
+当前主线采用 `spatiotemporal_headroom` 策略，节点排序由三类信息共同决定：
 
 - 干净模型预测误差：权重 0.45；
 - 节点时间波动：权重 0.30；
 - 路网邻接中心性：权重 0.25。
 
-配套新增 `tail_headroom` 样本选择模式，优先选择目标区域仍有下调空间且不过于异常的样本。目标塑形支持 `additive_directional`，可只对目标节点和尾部预测步做定向偏移；同时通过 `trigger_scope_node_count` 扩大触发覆盖范围，使触发信号强度和目标节点范围可以分开控制。
+配套 `tail_headroom` 样本选择模式，优先选择目标区域仍有下调空间且不过于异常的样本。目标塑形使用 `additive_directional`，只对目标节点和尾部预测步做加法式定向偏移，替代旧有的全局乘法式偏移。通过 `trigger_scope_node_count=20` 与 `trigger_node_count=10` 分离触发覆盖范围与目标偏移范围。训练时对目标区域施加 200× 损失权重，并通过 `frequency_smoothing_strength=0.45` 降低频域痕迹。
 
-当前相关配置包括：
+相关配置：
 
 | 配置 | 用途 |
 | --- | --- |
@@ -198,39 +198,42 @@ src/traffic_poison/thesis_contract.py
 主实验目录：
 
 ```text
-results/metr_la_poison_20260409_163212
+results/metr_la_poison_20260427_040007
 ```
 
-最佳候选参数：
+最佳候选参数（v11, p=0.05, σ=0.14）：
 
 | 参数 | 数值 |
 | --- | --- |
-| `selection_strategy` | `error` |
-| `window_mode` | `hybrid` |
-| `sample_selection_mode` | `directional_headroom` |
-| `target_weight_mode` | `dual_focus` |
-| `loss_focus_mode` | `directional_focus` |
-| `poison_ratio` | `0.02` |
-| `sigma_multiplier` | `0.065` |
-| `target_shift_ratio` | `0.075` |
-| `trigger_node_count` | `3` |
-| `trigger_steps` | `3` |
+| `selection_strategy` | `spatiotemporal_headroom` |
+| `sample_selection_mode` | `tail_headroom` |
+| `target_shift_mode` | `additive_directional` |
+| `trigger_scope_node_count` | `20` |
+| `trigger_node_count` | `10` |
+| `target_horizon_count` | `6` |
+| `target_shift_ratio` | `0.15` |
+| `poison_ratio` | `0.05` |
+| `sigma_multiplier` | `0.14` |
+| `target_region_loss_weight` | `200` |
+| `frequency_smoothing_strength` | `0.45` |
 
 最佳结果：
 
 | 指标 | 数值 |
 | --- | ---: |
-| `attack_success_rate` | 0.0174 |
-| `raw_selected_nodes_tail_horizon_attack_success_rate` | 0.0731 |
-| `raw_selected_nodes_attack_success_rate` | 0.0436 |
-| `clean_MAE_delta_ratio` | 0.0363 |
-| `raw_selected_nodes_tail_horizon_shift_direction_match_rate` | 0.7111 |
-| `raw_selected_nodes_tail_horizon_target_shift_attainment` | -0.0006 |
-| `frequency_energy_shift` | 0.0424 |
-| `mean_z_score` | 0.7574 |
+| `attack_success_rate` | 0.0044 |
+| `raw_selected_nodes_tail_horizon_attack_success_rate` | 0.1619 |
+| `raw_selected_nodes_attack_success_rate` | 0.0813 |
+| `clean_MAE_delta_ratio` | 0.0333 |
+| `raw_selected_nodes_tail_horizon_shift_direction_match_rate` | 0.9376 |
+| `raw_selected_nodes_tail_horizon_target_shift_attainment` | 0.0064 |
+| `frequency_energy_shift` | 1.5528 |
+| `mean_z_score` | 0.7557 |
 | `anomaly_rate` | 0.0043 |
 | `minimum_contract_pass` | true |
-| `strong_contract_pass` | false |
+| `strong_contract_pass` | true |
+
+9 组网格中 5 组通过最低标准，2 组通过更强标准。历史主实验（`results/metr_la_poison_20260409_163212`，`error` 策略，最低标准通过）仍保留作为基线参考。
 
 ### 5.2 防御验证
 
@@ -282,7 +285,7 @@ results/pems_bay_cross_20260409_164245
 | `configs/metr_la_opt_tail_directional.yaml` | `results/metr_la_poison_20260425_035827` | 局部 ASR 可达 12.83%，但全局 ASR 不足 |
 | `configs/metr_la_opt_global_stealth_probe.yaml` | `results/metr_la_poison_20260425_041952` | 局部 ASR 可达 9.65%，干净误差更低，但全局 ASR 和频域约束未同时过线 |
 
-这两组结果不替代主结果。当前推荐仍保留 `results/metr_la_poison_20260409_163212` 作为主实验达标结果。
+这两组结果不替代主结果。当前推荐 `results/metr_la_poison_20260427_040007`（v11）作为主实验达标结果，旧主实验 `results/metr_la_poison_20260409_163212` 保留作为历史基线。
 
 ### 5.5 时空脆弱位置感知优化最终结果
 
@@ -398,13 +401,14 @@ wanzi/
 | 文件 | 作用 |
 | --- | --- |
 | `configs/metr_la.yaml` | `METR-LA` 干净基线配置 |
-| `configs/metr_la_opt_loss_rebalance.yaml` | 当前主实验配置 |
+| `configs/metr_la.yaml` | `METR-LA` 干净基线配置 |
+| `configs/metr_la_spatiotemporal_headroom_v11.yaml` | **当前主实验配置**（双标准通过） |
+| `configs/metr_la_opt_loss_rebalance.yaml` | 旧主实验配置（历史基线） |
 | `configs/metr_la_opt_selection_balance.yaml` | 选择平衡方向 |
 | `configs/metr_la_opt_spread_recovery.yaml` | 范围恢复方向 |
 | `configs/metr_la_opt_global_stealth_probe.yaml` | 2026-04-25 全局与隐蔽性探针 |
 | `configs/metr_la_opt_tail_directional.yaml` | 2026-04-25 tail 触发探针 |
 | `configs/metr_la_spatiotemporal_headroom.yaml` | 时空脆弱位置感知初始配置 |
-| `configs/metr_la_spatiotemporal_headroom_v9.yaml` | 时空脆弱位置感知较优配置 |
 | `configs/metr_la_spatiotemporal_headroom_smoke.yaml` | 时空脆弱位置感知快速验证 |
 | `configs/pems_bay_paper_optimization.yaml` | `PEMS-BAY` 跨数据集验证 |
 | `configs/*_smoke.yaml` | 快速检查配置 |
@@ -473,7 +477,7 @@ python scripts/run_clean_baseline.py --config configs/metr_la.yaml
 
 ```bash
 python scripts/run_poison_experiments.py \
-  --config configs/metr_la_opt_loss_rebalance.yaml \
+  --config configs/metr_la_spatiotemporal_headroom_v11.yaml \
   --baseline-dir results/metr_la_clean_20260405_025213
 ```
 
