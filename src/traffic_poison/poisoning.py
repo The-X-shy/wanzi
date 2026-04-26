@@ -1544,9 +1544,19 @@ def compute_attack_success_metrics(
     upper = target_mean + tolerance_width
     success_mask = (pred_mean >= lower) & (pred_mean <= upper)
     target_arr = true_arr * (1.0 - abs(target_shift_ratio))
-    element_tolerance = np.maximum(np.abs(target_arr), 1e-8) * abs(float(tolerance_ratio))
-    element_success = np.abs(pred_arr - target_arr) <= element_tolerance
-    sample_all_success = np.all(element_success, axis=(1, 2))
+    batch_size = 512
+    element_success_list = []
+    sample_all_success_list = []
+    for start in range(0, pred_arr.shape[0], batch_size):
+        end = min(start + batch_size, pred_arr.shape[0])
+        chunk_pred = pred_arr[start:end]
+        chunk_target = target_arr[start:end]
+        element_tolerance = np.maximum(np.abs(chunk_target), 1e-8) * abs(float(tolerance_ratio))
+        element_success_chunk = np.abs(chunk_pred - chunk_target) <= element_tolerance
+        element_success_list.append(element_success_chunk)
+        sample_all_success_list.append(np.all(element_success_chunk, axis=(1, 2)))
+    element_success = np.concatenate(element_success_list, axis=0)
+    sample_all_success = np.concatenate(sample_all_success_list, axis=0)
     return {
         "attack_success_rate": float(np.mean(success_mask)),
         "elementwise_attack_success_rate": float(np.mean(element_success)),
