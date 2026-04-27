@@ -442,82 +442,395 @@ wanzi/
 
 ---
 
-## 8. 安装与环境
+## 8. 环境安装与依赖
 
-推荐 Python 3.10 或更高版本。
+### 8.1 Python 版本要求
+
+项目需要 **Python >= 3.10**。已在以下环境中验证：
+
+| 平台 | Python | PyTorch | 验证日期 |
+| --- | --- | --- | --- |
+| macOS (ARM) | 3.12.7 | 2.10.0 (CPU) | 2026-04-27 |
+| Windows (x64) | 3.10.x | 2.x (CUDA) | 2026-04-27 |
+
+### 8.2 安装方式一：venv + requirements.txt（推荐，精确复现）
+
+使用 `requirements.txt` 锁定依赖版本，确保跨环境一致：
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
+# 1. 创建虚拟环境
+python3 -m venv .venv
+source .venv/bin/activate        # Linux / macOS
+# .venv\Scripts\activate         # Windows cmd
+# .venv\Scripts\Activate.ps1     # Windows PowerShell
+
+# 2. 升级 pip
 python -m pip install --upgrade pip
+
+# 3. 安装依赖（精确版本）
+pip install -r requirements.txt
+
+# 4. 安装项目本身（可编辑模式）
 pip install -e .
 ```
 
-Windows / Anaconda 环境示例：
+### 8.3 安装方式二：Conda（适合 GPU 训练 / Windows）
 
 ```bash
-conda create -n wanzi310 python=3.10
+# 1. 创建环境
+conda create -n wanzi310 python=3.10 -y
 conda activate wanzi310
+
+# 2. 安装 PyTorch（根据 CUDA 版本选择）
+# CUDA 11.8:
+pip install torch>=2.0 --index-url https://download.pytorch.org/whl/cu118
+# CUDA 12.1:
+pip install torch>=2.0 --index-url https://download.pytorch.org/whl/cu121
+
+# 3. 安装其余依赖
+pip install -r requirements.txt
+
+# 4. 安装项目
 pip install -e .
 ```
 
-如需 GPU 训练，请确保安装的 PyTorch 与本机 CUDA 驱动匹配。
+### 8.4 验证安装
+
+```bash
+python -c "
+import torch
+import numpy as np
+import h5py
+import traffic_poison
+print(f'Python: OK')
+print(f'PyTorch {torch.__version__} (CUDA: {torch.cuda.is_available()})')
+print(f'NumPy {np.__version__}')
+print(f'h5py {h5py.__version__}')
+print(f'traffic_poison: OK')
+"
+```
+
+预期输出末尾包含 `traffic_poison: OK` 且无 ImportError。
+
+### 8.5 数据文件检查
+
+主实验（METR-LA）所需数据已包含在仓库中，无需额外下载：
+
+```bash
+ls -lh data/metr-la.h5 data/adj_mx.pkl
+```
+
+如果做 PEMS-BAY 补充实验，需要自行下载以下文件放入 `data/` 目录：
+- `data/pems-bay.h5`
+- `data/adj_mx_bay.pkl`
+
+PEMS-BAY 数据来源：https://github.com/liyaguang/DCRNN
+
+### 8.6 硬件建议
+
+| 配置 | CPU 训练 | GPU 训练 |
+| --- | --- | --- |
+| 干净基线 (~1 epoch) | ~30s | ~3s |
+| 干净基线 (30 epoch × 3 repeats) | ~15 min | ~2 min |
+| 投毒搜索 (9 组网格) | ~30 min | ~5 min |
+| 全流程 (基线 + 投毒 + 防御 + 跨数据集) | ~1 h | ~10 min |
+
+CPU 训练完全可行，所有实验均设置 `device: auto`（自动选择 GPU 或 CPU）。也可在配置中将 `training.device` 设为 `cpu` 强制使用 CPU。
 
 ---
 
-## 9. 复现实验
+## 9. 复现实验（完整流程）
 
-### 9.1 训练干净基线
+复现分为五个阶段。**每个阶段的命令都会输出一个时间戳目录**（如 `results/metr_la_clean_20260427_120000`），后续阶段需要传递前一个目录作为参数。
+
+建议先跑冒烟测试（9.6 节）验证环境和流程，再跑完整实验。
+
+### 9.1 阶段一：训练干净基线
+
+训练一个干净的 LSTM 模型（3 次重复，选择最佳检查点）。这是所有后续攻击实验的基础。
 
 ```bash
 python scripts/run_clean_baseline.py --config configs/metr_la.yaml
 ```
 
-### 9.2 运行主投毒实验
+**输出目录示例**：`results/metr_la_clean_20260427_120000`
+
+**输出文件**：
+| 文件 | 说明 |
+| --- | --- |
+| `baseline_summary.json` | 最佳基线路径及 MAE |
+| `clean_model.pt` | 模型权重 |
+| `train_predictions.npz` | 训练集预测（攻击阶段用于节点排序） |
+| `test_predictions.npz` | 测试集预测 |
+| `stability.json` | 多次重复的 MAE 波动 |
+| `clean_metrics.csv` | 各次重复的测试指标 |
+
+**验证**：打开 `baseline_summary.json`，确认 `best_mae` 约在 0.36 左右（正常波动 ±0.02）。
 
 ```bash
+python -c "import json; d=json.load(open('results/metr_la_clean_XXXXX/baseline_summary.json')); print(f'Best MAE: {d[\"best_mae\"]:.4f}')"
+```
+
+记录输出目录路径 `$BASELINE_DIR`，后续步骤需要引用。
+
+### 9.2 阶段二：运行主投毒实验
+
+使用 `spatiotemporal_headroom` v11 配置，进行 3×3=9 组超参数网格搜索（poison_ratio × sigma_multiplier），自动选择最佳候选并复验。
+
+```bash
+BASELINE_DIR="results/metr_la_clean_20260427_120000"  # 替换为实际路径
+
 python scripts/run_poison_experiments.py \
   --config configs/metr_la_spatiotemporal_headroom_v11.yaml \
-  --baseline-dir results/metr_la_clean_20260405_025213
+  --baseline-dir "$BASELINE_DIR"
 ```
 
-### 9.3 运行基础防御评估
+**输出目录示例**：`results/metr_la_poison_20260427_130000`
+
+**输出文件**：
+| 文件 | 说明 |
+| --- | --- |
+| `search_summary.json` | 搜索摘要、复验结果和论文标准状态 |
+| `attack_results.csv` | 所有 9 组候选的首次评估结果 |
+| `recheck_results.csv` | 复验后的聚合结果 |
+| `recheck_repeats.csv` | 复验的逐次详情 |
+| `best_attack.json` | 论文候选参数与指标（默认） |
+| `best_attack_paper.json` | 论文候选 |
+| `best_attack_raw.json` | 按局部 ASR 选择的最强候选 |
+| `best_poisoned_model_paper.pt` | 论文候选模型权重 |
+| `best_attack_bundle_paper.npz` | 论文候选评估数据包 |
+| `trigger_case.png` | 触发样例可视化 |
+| `best_prediction_case.png` | 预测对比可视化 |
+
+**验证**：确认论文标准通过。
 
 ```bash
+python -c "
+import json
+d = json.load(open('results/metr_la_poison_XXXXX/search_summary.json'))
+s = d.get('best_paper_summary', d.get('best_summary', {}))
+print(f'minimum_contract_pass: {s.get(\"minimum_contract_pass\")}')
+print(f'strong_contract_pass:   {s.get(\"strong_contract_pass\")}')
+print(f'raw_tail_ASR:           {s.get(\"raw_selected_nodes_tail_horizon_attack_success_rate\", 0):.4f}')
+print(f'clean_MAE_delta:        {s.get(\"clean_MAE_delta_ratio\", 0):.4f}')
+print(f'direction_match_rate:   {s.get(\"raw_selected_nodes_tail_horizon_shift_direction_match_rate\", 0):.4f}')
+print(f'frequency_energy_shift: {s.get(\"frequency_energy_shift\", 0):.4f}')
+"
+```
+
+**预期结果**（v11 配置，p=0.05, σ=0.14）：
+
+| 指标 | 预期值 | 论文最低标准 | 论文更强标准 |
+| --- | ---: | ---: | ---: |
+| `raw_tail_ASR` | ~16% | >= 5% | >= 6% |
+| `clean_MAE_delta` | ~3.3% | <= 5% | <= 4% |
+| `direction_match_rate` | ~94% | >= 60% | >= 65% |
+| `frequency_energy_shift` | ~1.6 | <= 3.0 | <= 2.0 |
+| `mean_z_score` | ~0.76 | <= 0.80 | <= 0.76 |
+
+### 9.3 阶段三：运行防御评估
+
+对投毒模型进行基础防御检查：z-score 异常筛查、高频能量检查、移动平均平滑。
+
+```bash
+POISON_DIR="results/metr_la_poison_20260427_130000"  # 替换为实际路径
+
 python scripts/run_defense_eval.py \
   --config configs/metr_la_opt_loss_rebalance.yaml \
-  --poison-dir results/metr_la_poison_20260409_163212
+  --poison-dir "$POISON_DIR"
 ```
 
-### 9.4 运行跨数据集验证
+**输出目录示例**：`results/defense_eval_YYYYMMDD_HHMMSS`
+
+**验证**：检查 `defense_summary.json`，确认 z-score 筛查和移动平均平滑未消掉攻击效果。
+
+### 9.4 阶段四：跨数据集验证（PEMS-BAY）
+
+将 METR-LA 上发现的最佳攻击参数迁移到 PEMS-BAY 数据集，验证攻击的可迁移性。
 
 ```bash
+SOURCE_POISON_DIR="results/metr_la_poison_20260427_130000"  # 替换为实际路径
+
 python scripts/run_cross_dataset.py \
   --config configs/pems_bay_paper_optimization.yaml \
-  --source-poison-dir results/metr_la_poison_20260409_163212
+  --source-poison-dir "$SOURCE_POISON_DIR"
 ```
 
-### 9.5 生成论文汇总表
+> **注意**：需要先自行下载 PEMS-BAY 数据（见 8.5 节），或跳过此阶段。
+
+**输出目录示例**：`results/pems_bay_cross_YYYYMMDD_HHMMSS`
+
+**预期结果**：局部 ASR >= 10%，干净 MAE 变化 <= 3%，论文标准通过。
+
+### 9.5 阶段五：生成论文汇总表
+
+汇总所有阶段的实验结果，生成论文可直接使用的 markdown 和 CSV 表格。
 
 ```bash
 python scripts/build_thesis_tables.py \
-  --metr-baseline-dir results/metr_la_clean_20260405_025213 \
-  --metr-poison-dir results/metr_la_poison_20260409_163212 \
-  --defense-dir results/defense_eval_20260409_164245 \
-  --cross-dir results/pems_bay_cross_20260409_164245
+  --metr-baseline-dir "$BASELINE_DIR" \
+  --metr-poison-dir "$POISON_DIR" \
+  --defense-dir "$DEFENSE_DIR" \
+  --cross-dir "$CROSS_DIR"
 ```
 
-Windows `cmd` 示例：
+**输出目录示例**：`results/thesis_tables_YYYYMMDD_HHMMSS`
+
+**输出文件**：
+| 文件 | 说明 |
+| --- | --- |
+| `thesis_summary.md` | 可直接阅读的论文实验摘要 |
+| `paper_candidate_table.csv` | 论文候选表 |
+| `parameter_sensitivity_table.csv` | 参数敏感性表 |
+| `defense_summary_table.csv` | 防御摘要表 |
+| `cross_candidate_comparison.csv` | 跨数据集候选比较 |
+
+### 9.6 冒烟测试（快速验证）
+
+在跑完整实验前，使用冒烟配置快速验证环境是否正确安装、数据是否就绪。
+
+冒烟配置使用更小的参数空间（epochs=4, repeats=1, 1-2 组网格），在 CPU 上 5 分钟内即可完成。
+
+**冒烟测试 — 干净基线**：
+
+```bash
+python scripts/run_clean_baseline.py --config configs/metr_la_smoke.yaml
+```
+
+**冒烟测试 — 投毒实验**：
+
+```bash
+# 使用上一步输出的目录
+python scripts/run_poison_experiments.py \
+  --config configs/metr_la_spatiotemporal_headroom_smoke.yaml \
+  --baseline-dir results/metr_la_clean_XXXXX
+```
+
+冒烟测试通过标准：流程完整运行不报错，`search_summary.json` 正常写入即可。
+
+### 9.7 一键复现（完整脚本）
+
+如果数据已就绪，可以使用以下脚本一键复现全流程：
+
+```bash
+#!/bin/bash
+# 一键复现脚本 — 保存为 reproduce.sh 并执行
+set -euo pipefail
+
+# 环境检查
+echo "=== 1/5 训练干净基线 ==="
+python scripts/run_clean_baseline.py --config configs/metr_la.yaml
+BASELINE_DIR=$(ls -dt results/metr_la_clean_* | head -1)
+echo "基线目录: $BASELINE_DIR"
+
+echo "=== 2/5 运行主投毒实验 ==="
+python scripts/run_poison_experiments.py \
+  --config configs/metr_la_spatiotemporal_headroom_v11.yaml \
+  --baseline-dir "$BASELINE_DIR"
+POISON_DIR=$(ls -dt results/metr_la_poison_* | head -1)
+echo "投毒目录: $POISON_DIR"
+
+echo "=== 3/5 运行防御评估 ==="
+python scripts/run_defense_eval.py \
+  --config configs/metr_la_opt_loss_rebalance.yaml \
+  --poison-dir "$POISON_DIR"
+DEFENSE_DIR=$(ls -dt results/defense_eval_* | head -1)
+echo "防御目录: $DEFENSE_DIR"
+
+echo "=== 4/5 跨数据集验证 ==="
+if [ -f data/pems-bay.h5 ]; then
+  python scripts/run_cross_dataset.py \
+    --config configs/pems_bay_paper_optimization.yaml \
+    --source-poison-dir "$POISON_DIR"
+  CROSS_DIR=$(ls -dt results/pems_bay_cross_* | head -1)
+  echo "跨数据集目录: $CROSS_DIR"
+else
+  echo "跳过 (缺少 PEMS-BAY 数据)"
+  CROSS_DIR=""
+fi
+
+echo "=== 5/5 生成论文汇总表 ==="
+if [ -n "$CROSS_DIR" ]; then
+  python scripts/build_thesis_tables.py \
+    --metr-baseline-dir "$BASELINE_DIR" \
+    --metr-poison-dir "$POISON_DIR" \
+    --defense-dir "$DEFENSE_DIR" \
+    --cross-dir "$CROSS_DIR"
+else
+  python scripts/build_thesis_tables.py \
+    --metr-baseline-dir "$BASELINE_DIR" \
+    --metr-poison-dir "$POISON_DIR" \
+    --defense-dir "$DEFENSE_DIR"
+fi
+
+echo "=== 完成 ==="
+echo "基线:      $BASELINE_DIR"
+echo "投毒:      $POISON_DIR"
+echo "防御:      $DEFENSE_DIR"
+echo "跨数据集:  ${CROSS_DIR:-跳过}"
+```
+
+### 9.8 Windows cmd 对应命令
 
 ```bat
-D:\ProgramData\Anaconda3\envs\wanzi310\python.exe scripts\run_poison_experiments.py --config configs\metr_la_opt_loss_rebalance.yaml --baseline-dir results\metr_la_clean_20260405_025213
+REM 激活环境
+D:\ProgramData\Anaconda3\envs\wanzi310\python.exe scripts\run_clean_baseline.py --config configs\metr_la.yaml
+
+REM 设置变量（替换目录名）
+set BASELINE_DIR=results\metr_la_clean_20260427_120000
+set POISON_DIR=results\metr_la_poison_20260427_130000
+
+REM 主投毒实验
+python scripts\run_poison_experiments.py --config configs\metr_la_spatiotemporal_headroom_v11.yaml --baseline-dir %BASELINE_DIR%
+
+REM 防御评估
+python scripts\run_defense_eval.py --config configs\metr_la_opt_loss_rebalance.yaml --poison-dir %POISON_DIR%
 ```
 
 ---
 
-## 10. 输出文件说明
+## 10. 常见问题与排查
 
-### 10.1 干净基线目录
+### 10.1 ImportError: No module named 'traffic_poison'
+
+未安装项目包。执行 `pip install -e .`（在项目根目录下）。
+
+### 10.2 FileNotFoundError: data/metr-la.h5
+
+数据文件不在 `data/` 目录。METR-LA 数据已包含在仓库中，确认：
+```bash
+git lfs pull   # 如果仓库使用 Git LFS
+ls data/metr-la.h5 data/adj_mx.pkl
+```
+
+### 10.3 CUDA out of memory
+
+减小 batch size 或强制使用 CPU：
+```bash
+# 方式一：在配置中设置
+# 编辑 configs/metr_la_spatiotemporal_headroom_v11.yaml
+# training.device: cpu
+
+# 方式二：环境变量
+CUDA_VISIBLE_DEVICES="" python scripts/run_poison_experiments.py ...
+```
+
+### 10.4 结果与预期不符
+
+同一配置在不同平台和 PyTorch 版本之间可能存在微小数值差异（通常 < 5% 相对偏差）。论文标准阈值留有足够余量以吸收数值波动。如果结果显著偏离：
+1. 检查 Python 和 PyTorch 版本是否满足要求
+2. 检查 `seed: 42` 是否在配置中设置
+3. 检查数据文件是否完整（`md5 data/metr-la.h5`）
+
+### 10.5 macOS / Apple Silicon 特殊说明
+
+PyTorch 在 Apple Silicon 上使用 MPS 后端。当前代码使用 `device: auto`，会自动检测。如果遇到 MPS 相关问题，可以在配置中强制使用 `cpu`。
+
+---
+
+## 11. 输出文件说明
+
+### 11.1 干净基线目录
 
 | 文件 | 含义 |
 | --- | --- |
@@ -528,7 +841,7 @@ D:\ProgramData\Anaconda3\envs\wanzi310\python.exe scripts\run_poison_experiments
 | `train_predictions.npz` | 训练集预测结果 |
 | `test_predictions.npz` | 测试集预测结果 |
 
-### 10.2 投毒实验目录
+### 11.2 投毒实验目录
 
 | 文件 | 含义 |
 | --- | --- |
@@ -544,14 +857,14 @@ D:\ProgramData\Anaconda3\envs\wanzi310\python.exe scripts\run_poison_experiments
 | `trigger_case.png` | 触发样例图 |
 | `best_prediction_case.png` | 预测对比图 |
 
-### 10.3 防御目录
+### 11.3 防御目录
 
 | 文件 | 含义 |
 | --- | --- |
 | `defense_summary.json` | 防御检查摘要 |
 | `defense_results.csv` | 防御检查表格 |
 
-### 10.4 论文汇总目录
+### 11.4 论文汇总目录
 
 | 文件 | 含义 |
 | --- | --- |
@@ -563,7 +876,7 @@ D:\ProgramData\Anaconda3\envs\wanzi310\python.exe scripts\run_poison_experiments
 
 ---
 
-## 11. 指标解释
+## 12. 指标解释
 
 | 指标 | 含义 |
 | --- | --- |
@@ -584,7 +897,7 @@ D:\ProgramData\Anaconda3\envs\wanzi310\python.exe scripts\run_poison_experiments
 
 ---
 
-## 12. 当前结论
+## 13. 当前结论
 
 1. 在 `METR-LA` 上，当前方法已经在干净性能、局部攻击效果、全局辅助 ASR、方向一致性和基础隐蔽性之间取得可写结果。
 2. 主结果满足最低论文标准，但更强正文标准仍未完全满足。
@@ -594,7 +907,7 @@ D:\ProgramData\Anaconda3\envs\wanzi310\python.exe scripts\run_poison_experiments
 
 ---
 
-## 13. 建议阅读顺序
+## 14. 建议阅读顺序
 
 如果第一次阅读本仓库，建议按以下顺序：
 
