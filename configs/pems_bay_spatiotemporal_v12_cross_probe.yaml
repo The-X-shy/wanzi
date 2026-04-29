@@ -44,17 +44,17 @@ poison:
   target_horizon_modes: [tail]
   target_horizon_count: 3
   target_shift_ratio: 0.10
-  target_shift_ratios: [0.08, 0.10, 0.12]
+  target_shift_ratios: [0.10]
   fallback_shift_ratio: 0.05
   success_tolerance_ratio: 0.05
   max_clean_mae_delta_ratio: 0.08
   evaluation_tail_horizon_count: 3
   target_region_loss_weight: 200.0
-  target_region_loss_weights: [100.0, 200.0]
+  target_region_loss_weights: [200.0]
   window_mode: hybrid
   window_modes: [hybrid]
   frequency_smoothing_strength: 0.25
-  frequency_smoothing_strengths: [0.15, 0.25, 0.35]
+  frequency_smoothing_strengths: [0.25]
   frequency_cutoff_ratio: 0.35
   frequency_cutoff_ratios: [0.35]
   frequency_decay: 0.25
