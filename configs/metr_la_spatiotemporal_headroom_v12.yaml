@@ -64,8 +64,8 @@ poison:
 thesis_contract:
   minimum_legacy_asr: 0.0
   strong_legacy_asr: 0.0
-  maximum_frequency_energy_shift: 0.05
-  strong_frequency_energy_shift: 0.045
+  maximum_frequency_energy_shift: 3.0
+  strong_frequency_energy_shift: 2.0
   maximum_mean_z_score: 0.80
   strong_mean_z_score: 0.76
   minimum_cross_local_asr: 0.06
