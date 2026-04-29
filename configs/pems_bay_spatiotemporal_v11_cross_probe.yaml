@@ -1,0 +1,96 @@
+experiment_name: pems_bay_spatiotemporal_v11_cross_probe
+seed: 42
+
+dataset:
+  name: PEMS-BAY
+  data_path: ../data/pems-bay.csv
+  adjacency_path: ../data/adj_mx_bay.pkl
+  input_len: 12
+  horizon: 12
+  train_ratio: 0.7
+  val_ratio: 0.1
+  test_ratio: 0.2
+  batch_size: 256
+  num_workers: 0
+  fill_missing: true
+  scale: true
+  shuffle_train: false
+
+training:
+  hidden_size: 64
+  num_layers: 2
+  dropout: 0.0
+  lr: 0.0005
+  weight_decay: 0.0
+  epochs: 30
+  patience: 10
+  loss: mae
+  device: auto
+  repeats: 1
+  grad_clip_norm: 0.5
+
+poison:
+  trigger_steps: 5
+  trigger_node_count: 10
+  trigger_scope_node_count: 20
+  poison_ratios: [0.05]
+  sigma_multipliers: [0.10, 0.14, 0.18]
+  selection_strategies: [spatiotemporal_headroom]
+  sample_selection_mode: tail_headroom
+  sample_selection_modes: [tail_headroom]
+  target_shift_mode: additive_directional
+  target_shift_modes: [additive_directional]
+  target_horizon_mode: tail
+  target_horizon_modes: [tail]
+  target_horizon_count: 6
+  target_shift_ratio: 0.15
+  target_shift_ratios: [0.15]
+  fallback_shift_ratio: 0.05
+  success_tolerance_ratio: 0.05
+  max_clean_mae_delta_ratio: 0.08
+  evaluation_tail_horizon_count: 3
+  target_region_loss_weight: 200.0
+  target_region_loss_weights: [200.0]
+  window_mode: hybrid
+  window_modes: [hybrid]
+  frequency_smoothing_strength: 0.45
+  frequency_smoothing_strengths: [0.45]
+  frequency_cutoff_ratio: 0.35
+  frequency_cutoff_ratios: [0.35]
+  frequency_decay: 0.25
+  frequency_decays: [0.25]
+
+cross_validation:
+  source_table: single_stage_results.csv
+  enforce_source_contract_gate: true
+  family_order: [hybrid]
+  family_top_k: 3
+  attack_repeats: 1
+  selection_strategies: [spatiotemporal_headroom]
+  poison_ratios: [0.05]
+  sigma_multipliers: [0.10, 0.14, 0.18]
+  trigger_node_count: [10]
+  families:
+    hybrid:
+      window_modes: [hybrid]
+      trigger_steps: [5]
+
+thesis_contract:
+  minimum_legacy_asr: 0.0
+  strong_legacy_asr: 0.0
+  maximum_frequency_energy_shift: 3.0
+  strong_frequency_energy_shift: 2.0
+  maximum_mean_z_score: 0.80
+  strong_mean_z_score: 0.76
+  minimum_cross_local_asr: 0.06
+  strong_cross_local_asr: 0.07
+  cross_clean_mae_delta_ratio_max: 0.05
+  cross_clean_mae_delta_ratio_strong_max: 0.03
+
+defense:
+  zscore_threshold: 3.0
+  moving_average_window: 3
+  frequency_band_fraction: 0.25
+
+output:
+  root_dir: ../results
