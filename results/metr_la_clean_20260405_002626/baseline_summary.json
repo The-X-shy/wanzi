@@ -1,0 +1,9 @@
+{
+  "best_seed": 42,
+  "best_metrics": {
+    "MAE": 0.38178449869155884,
+    "MAPE": 184.61917638778687,
+    "RMSE": 0.8494790196418762
+  },
+  "checkpoint_path": "/Users/lilin/Desktop/wanzi/results/metr_la_clean_20260405_002626/clean_model.pt"
+}

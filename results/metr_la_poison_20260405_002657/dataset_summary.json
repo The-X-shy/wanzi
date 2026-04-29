@@ -1,0 +1,14 @@
+{
+  "dataset_name": "METR-LA",
+  "data_path": "/Users/lilin/Desktop/wanzi/data/metr-la.h5",
+  "input_len": 12,
+  "horizon": 12,
+  "feature_count": 207,
+  "train_samples": 23967,
+  "val_samples": 3404,
+  "test_samples": 6832,
+  "time_steps": 34272,
+  "missing_rate_after_fill": 0.0,
+  "feature_mean_abs": 53.7190055847168,
+  "feature_std_mean": 18.39472770690918
+}

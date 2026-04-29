@@ -1,0 +1,2 @@
+selection_strategy,poison_ratio,sigma_multiplier,time_domain_amplitude,frequency_energy_shift,anomaly_rate,mean_z_score
+error,0.03,0.1,0.0001925954925971328,0.13143523055648548,0.004250387491656201,0.7573499164807178

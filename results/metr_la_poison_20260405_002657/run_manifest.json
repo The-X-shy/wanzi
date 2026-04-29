@@ -1,0 +1,5 @@
+{
+  "baseline_dir": "/Users/lilin/Desktop/wanzi/results/metr_la_clean_20260405_002626",
+  "best_attack_path": "/Users/lilin/Desktop/wanzi/results/metr_la_poison_20260405_002657/best_attack.json",
+  "best_model_path": "/Users/lilin/Desktop/wanzi/results/metr_la_poison_20260405_002657/best_poisoned_model.pt"
+}

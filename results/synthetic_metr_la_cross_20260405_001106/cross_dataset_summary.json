@@ -1,0 +1,75 @@
+{
+  "dataset_summary": {
+    "dataset_name": "SYNTHETIC-METR-LA",
+    "data_path": "/Users/lilin/Desktop/wanzi/data/synthetic/synthetic_metr_la.h5",
+    "input_len": 12,
+    "horizon": 12,
+    "feature_count": 8,
+    "train_samples": 313,
+    "val_samples": 25,
+    "test_samples": 73,
+    "time_steps": 480,
+    "missing_rate_after_fill": 0.0,
+    "feature_mean_abs": 54.995670318603516,
+    "feature_std_mean": 7.398867607116699
+  },
+  "best_attack_replayed": {
+    "selection_strategy": "error",
+    "poison_ratio": 0.03,
+    "sigma_multiplier": 0.1,
+    "selected_nodes": "7,6,0,5,1",
+    "trigger_steps": 3,
+    "baseline_MAE": 0.38458487391471863,
+    "baseline_MAPE": 206.88855648040771,
+    "baseline_RMSE": 0.48293933272361755,
+    "clean_MAE": 0.38387733697891235,
+    "clean_MAPE": 197.1929907798767,
+    "clean_RMSE": 0.4914047122001648,
+    "triggered_MAE": 0.3840802311897278,
+    "triggered_MAPE": 197.3036527633667,
+    "triggered_RMSE": 0.49153468012809753,
+    "clean_MAE_delta": -0.0007075369358062744,
+    "clean_MAE_delta_ratio": -0.0018397419758198034,
+    "clean_MAPE_delta": -9.695565700531006,
+    "clean_MAPE_delta_ratio": -0.046863711872092706,
+    "clean_RMSE_delta": 0.008465379476547241,
+    "clean_RMSE_delta_ratio": 0.017528867298518245,
+    "attack_success_rate": 0.0,
+    "target_shift_ratio": 0.1,
+    "tolerance_ratio": 0.05,
+    "time_domain_amplitude": 0.00251459042292938,
+    "frequency_energy_shift": 0.05323895662463439,
+    "anomaly_rate": 0.003139269406392694,
+    "mean_z_score": 0.8094415557009021
+  },
+  "clean_metrics": {
+    "MAE": 0.38458487391471863,
+    "MAPE": 206.88855648040771,
+    "RMSE": 0.48293933272361755
+  },
+  "poisoned_clean_metrics": {
+    "MAE": 0.3792336583137512,
+    "MAPE": 213.86239528656006,
+    "RMSE": 0.47805944085121155
+  },
+  "triggered_metrics": {
+    "MAE": 0.3792761564254761,
+    "MAPE": 214.0465259552002,
+    "RMSE": 0.4780498445034027
+  },
+  "attack_success_rate": 0.0,
+  "clean_metric_change": {
+    "MAE_delta": -0.005351215600967407,
+    "MAE_delta_ratio": -0.013914264350797205,
+    "MAPE_delta": 6.973838806152344,
+    "MAPE_delta_ratio": 0.033708190171517605,
+    "RMSE_delta": -0.004879891872406006,
+    "RMSE_delta_ratio": -0.010104564987252198
+  },
+  "stealth_metrics": {
+    "time_domain_amplitude": 0.00251459042292938,
+    "frequency_energy_shift": 0.05323895662463439,
+    "anomaly_rate": 0.003139269406392694,
+    "mean_z_score": 0.8094415557009021
+  }
+}

@@ -1,0 +1,2 @@
+selection_strategy,poison_ratio,sigma_multiplier,time_domain_amplitude,frequency_energy_shift,anomaly_rate,mean_z_score
+spatiotemporal_headroom,0.02,0.08,0.00011903533733289288,0.08921098351202693,0.004250387491656201,0.7573603514125106

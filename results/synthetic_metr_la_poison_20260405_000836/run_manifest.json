@@ -1,0 +1,5 @@
+{
+  "baseline_dir": "/Users/lilin/Desktop/wanzi/results/synthetic_metr_la_clean_20260405_000825",
+  "best_attack_path": "/Users/lilin/Desktop/wanzi/results/synthetic_metr_la_poison_20260405_000836/best_attack.json",
+  "best_model_path": "/Users/lilin/Desktop/wanzi/results/synthetic_metr_la_poison_20260405_000836/best_poisoned_model.pt"
+}

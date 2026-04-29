@@ -1,0 +1,5 @@
+{
+  "baseline_dir": null,
+  "best_attack_path": "/Users/lilin/Desktop/wanzi/results/synthetic_metr_la_poison_20260427_010728/best_attack.json",
+  "best_model_path": "/Users/lilin/Desktop/wanzi/results/synthetic_metr_la_poison_20260427_010728/best_poisoned_model.pt"
+}

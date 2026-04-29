@@ -1,0 +1,2 @@
+selection_strategy,poison_ratio,sigma_multiplier,attack_success_rate,clean_MAE_delta_ratio
+spatiotemporal_headroom,0.02,0.08,0.0077576112412177985,-0.03939852542600855

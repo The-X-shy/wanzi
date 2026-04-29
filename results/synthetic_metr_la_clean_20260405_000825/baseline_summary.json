@@ -1,0 +1,9 @@
+{
+  "best_seed": 42,
+  "best_metrics": {
+    "MAE": 0.38458487391471863,
+    "MAPE": 206.88855648040771,
+    "RMSE": 0.48293933272361755
+  },
+  "checkpoint_path": "/Users/lilin/Desktop/wanzi/results/synthetic_metr_la_clean_20260405_000825/clean_model.pt"
+}

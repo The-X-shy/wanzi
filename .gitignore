@@ -9,13 +9,15 @@ __pycache__/
 *.py[cod]
 
 .mplcache/
-results/
+# Binary result artifacts (JSON/CSV summaries are tracked)
+results/**/*.pt
+results/**/*.npz
+results/**/*.png
 _unpacked_midterm/
 wanzi/
 
 data/synthetic/
 data/pems-bay.h5
-data/adj_mx_bay.pkl
 data/distances_la_2012.csv
 data/graph_sensor_ids.txt
 

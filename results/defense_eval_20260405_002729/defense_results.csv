@@ -1,0 +1,5 @@
+name,clean_flag_rate,poison_flag_rate,threshold,cutoff,clean_delta,poison_delta,kernel_size,asr_before,asr_after
+zscore_anomaly_screen,0.1371487119437939,0.1371487119437939,3.0,,,,,,
+high_freq_energy_check,0.12046252927400468,0.12046252927400468,0.25,0.5,,,,,
+moving_average_sensitivity,,,,,0.08555641681260026,0.08557251005450779,3.0,,
+moving_average_asr_effect,,,,,,,3.0,0.009660421545667448,0.009514051522248244

@@ -1,0 +1,24 @@
+{
+  "baseline_dir": null,
+  "best_attack_path": "/Users/lilin/Desktop/wanzi/results/metr_la_poison_20260427_023129/best_attack.json",
+  "best_attack_paper_path": "/Users/lilin/Desktop/wanzi/results/metr_la_poison_20260427_023129/best_attack_paper.json",
+  "best_attack_raw_path": "/Users/lilin/Desktop/wanzi/results/metr_la_poison_20260427_023129/best_attack_raw.json",
+  "best_model_path": "/Users/lilin/Desktop/wanzi/results/metr_la_poison_20260427_023129/best_poisoned_model.pt",
+  "search_summary_path": "/Users/lilin/Desktop/wanzi/results/metr_la_poison_20260427_023129/search_summary.json",
+  "recheck_results_path": "/Users/lilin/Desktop/wanzi/results/metr_la_poison_20260427_023129/recheck_results.csv",
+  "paper_artifacts": {
+    "best_attack_path": "/Users/lilin/Desktop/wanzi/results/metr_la_poison_20260427_023129/best_attack_paper.json",
+    "best_model_path": "/Users/lilin/Desktop/wanzi/results/metr_la_poison_20260427_023129/best_poisoned_model_paper.pt",
+    "best_bundle_path": "/Users/lilin/Desktop/wanzi/results/metr_la_poison_20260427_023129/best_attack_bundle_paper.npz",
+    "prediction_plot_path": "/Users/lilin/Desktop/wanzi/results/metr_la_poison_20260427_023129/best_prediction_case_paper.png",
+    "trigger_plot_path": "/Users/lilin/Desktop/wanzi/results/metr_la_poison_20260427_023129/trigger_case_paper.png"
+  },
+  "raw_artifacts": {
+    "best_attack_path": "/Users/lilin/Desktop/wanzi/results/metr_la_poison_20260427_023129/best_attack_paper.json",
+    "best_model_path": "/Users/lilin/Desktop/wanzi/results/metr_la_poison_20260427_023129/best_poisoned_model_paper.pt",
+    "best_bundle_path": "/Users/lilin/Desktop/wanzi/results/metr_la_poison_20260427_023129/best_attack_bundle_paper.npz",
+    "prediction_plot_path": "/Users/lilin/Desktop/wanzi/results/metr_la_poison_20260427_023129/best_prediction_case_paper.png",
+    "trigger_plot_path": "/Users/lilin/Desktop/wanzi/results/metr_la_poison_20260427_023129/trigger_case_paper.png"
+  },
+  "paper_and_raw_same_candidate": true
+}

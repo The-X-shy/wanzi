@@ -1,0 +1,30 @@
+{
+  "source_poison_dir": "/Users/lilin/Desktop/wanzi/results/synthetic_metr_la_poison_20260405_001038",
+  "rows": [
+    {
+      "name": "zscore_anomaly_screen",
+      "clean_flag_rate": 0.1643835616438356,
+      "poison_flag_rate": 0.1643835616438356,
+      "threshold": 2.5
+    },
+    {
+      "name": "high_freq_energy_check",
+      "clean_flag_rate": 0.410958904109589,
+      "poison_flag_rate": 0.410958904109589,
+      "threshold": 0.25,
+      "cutoff": 0.5
+    },
+    {
+      "name": "moving_average_sensitivity",
+      "clean_delta": 0.10411256560571157,
+      "poison_delta": 0.10412270988529529,
+      "kernel_size": 3
+    },
+    {
+      "name": "moving_average_asr_effect",
+      "asr_before": 0.0,
+      "asr_after": 0.0,
+      "kernel_size": 3
+    }
+  ]
+}
