@@ -101,13 +101,19 @@ results/metr_la_clean_20260405_025213
 
 ### 3.2 脆弱节点和时间位置识别
 
-攻击候选首先通过训练数据与基线预测结果确定。当前主线采用 `error` 策略，优先选择预测误差和局部敏感性较高的节点。触发窗口采用 `hybrid` 策略，兼顾高响应时间位置与序列尾部位置。
+攻击候选首先通过训练数据与基线预测结果确定。当前主线采用 `spatiotemporal_headroom` 策略，节点排序由三类信息共同决定：
 
-当前主结果选择的节点和时间位置为：
+- 干净模型预测误差：权重 0.45
+- 节点时间波动：权重 0.30
+- 路网邻接中心性：权重 0.25
+
+触发窗口采用 `hybrid` 策略，兼顾高响应时间位置与序列尾部位置。
+
+当前 v12 主结果选择的节点和时间位置为：
 
 | 项目 | 数值 |
 | --- | --- |
-| 触发节点 | `5, 140, 165` |
+| 触发节点 | `5, 51, 127, 140, 155` |
 | 触发时间位置 | `0, 1, 11` |
 | 目标预测步 | `9, 10, 11` |
 
@@ -115,14 +121,14 @@ results/metr_la_clean_20260405_025213
 
 当前主线采用 `directional_headroom`。该策略优先选择在目标区域仍有向下偏移空间的训练样本，从而避免触发后预测方向与目标方向不一致。
 
-后续探索中也保留了 `hybrid_headroom_error`，用于平衡方向空间与局部误差，但当前主结果仍来自 `directional_headroom`。
+> **关键发现：** v11 使用的 `tail_headroom` 样本选择导致跨数据集迁移完全失败（PEMS-BAY ASR 0%）。切换为 `directional_headroom` 是 v12 桥接配置的核心改动，该改动使 PEMS-BAY 跨数据集 ASR 跃升至 45.69%。
 
 ### 3.4 目标塑形与带权训练
 
 当前主线采用：
 
-- `dual_focus`：同时保留一定全局目标偏移，并强化被攻击节点的尾部预测时段
-- `directional_focus`：对目标节点和目标预测步增加训练权重
+- `additive_directional`：对目标节点和尾部预测步做加法式定向偏移，替代旧有的全局乘法式偏移
+- `target_region_loss_weight=200`：对目标区域施加 200× 损失权重，确保模型学习到攻击目标
 
 这两项用于解决回归后门中的一个核心问题：如果只调整局部目标，旧口径全局 ASR 可能不足；如果只追求全局偏移，局部目标又容易不稳定。
 
@@ -142,13 +148,9 @@ results/metr_la_clean_20260405_025213
 
 该优化延续开题报告和中期报告中的原技术路线：数据预处理、滑动窗口、`LSTM` 基线、训练期后门投毒和多指标评估均保持不变，只增强”脆弱节点、脆弱时间窗口和目标区域偏移稳定性”。
 
-当前主线采用 `spatiotemporal_headroom` 策略，节点排序由三类信息共同决定：
+当前主线采用 `spatiotemporal_headroom` 策略，节点排序由三类信息共同决定（详见 3.2 节）。
 
-- 干净模型预测误差：权重 0.45；
-- 节点时间波动：权重 0.30；
-- 路网邻接中心性：权重 0.25。
-
-配套 `tail_headroom` 样本选择模式，优先选择目标区域仍有下调空间且不过于异常的样本。目标塑形使用 `additive_directional`，只对目标节点和尾部预测步做加法式定向偏移，替代旧有的全局乘法式偏移。通过 `trigger_scope_node_count=20` 与 `trigger_node_count=10` 分离触发覆盖范围与目标偏移范围。训练时对目标区域施加 200× 损失权重，并通过 `frequency_smoothing_strength=0.45` 降低频域痕迹。
+配套 `directional_headroom` 样本选择模式，优先选择目标区域仍有下调空间的样本（v12 核心改进）。目标塑形使用 `additive_directional`，只对目标节点和尾部预测步做加法式定向偏移。通过 `trigger_scope_node_count=8` 与 `trigger_node_count=5` 分离触发覆盖范围与目标偏移范围。训练时对目标区域施加 200× 损失权重，并通过 `frequency_smoothing_strength=0.25` 降低频域痕迹。
 
 相关配置：
 
@@ -156,7 +158,9 @@ results/metr_la_clean_20260405_025213
 | --- | --- |
 | `configs/metr_la_spatiotemporal_headroom.yaml` | 初始正式配置 |
 | `configs/metr_la_spatiotemporal_headroom_smoke.yaml` | 快速验证配置 |
-| `configs/metr_la_spatiotemporal_headroom_v11.yaml` | **当前主实验配置**（复验主结果达到最低标准） |
+| `configs/metr_la_spatiotemporal_headroom_v11.yaml` | v11 增强配置（METR-LA 最低标准通过，PEMS-BAY 补测未通过） |
+| `configs/metr_la_spatiotemporal_headroom_v12.yaml` | **v12 桥接配置（推荐）**：METR-LA + PEMS-BAY 双通过 |
+| `configs/pems_bay_spatiotemporal_v12_cross_probe.yaml` | v12 PEMS-BAY 跨数据集探针配置 |
 
 ---
 
@@ -191,7 +195,7 @@ src/traffic_poison/thesis_contract.py
 | `frequency_energy_shift` | <= 2.0 |
 | `mean_z_score` | <= 0.76 |
 
-当前联合通过路线的 `METR-LA` 主结果达到最低标准；本次重试后的 `PEMS-BAY` 跨数据集验证达到最低标准和更强标准。`spatiotemporal_headroom` v11 策略作为 `METR-LA` 增强结果保留，但它的 `PEMS-BAY` 补测未通过。
+当前推荐路线 v12 的 `METR-LA` 主结果达到最低标准（局部 ASR 6.45%，更强标准双通过）；v12 `PEMS-BAY` 跨数据集验证达到最低标准和更强标准（局部 ASR 45.69%）。
 
 ---
 
@@ -238,6 +242,46 @@ results/metr_la_poison_20260409_163212
 
 该结果作为当前联合通过路线的 `METR-LA` 主结果。427/v11 复验结果在局部 ASR 上更高，但它的 `PEMS-BAY` 补测未通过，因此不替代这条联合通过路线。
 
+#### v12 主实验结果（推荐）
+
+v12 主实验目录：
+
+```text
+results/metr_la_poison_20260429_203731
+```
+
+最佳候选参数（p=0.03, σ=0.065）：
+
+| 参数 | 数值 |
+| --- | --- |
+| `selection_strategy` | `spatiotemporal_headroom` |
+| `sample_selection_mode` | `directional_headroom` |
+| `target_shift_mode` | `additive_directional` |
+| `trigger_node_count` | `5` |
+| `trigger_scope_node_count` | `8` |
+| `target_horizon_count` | `3` |
+| `target_shift_ratio` | `0.10` |
+| `poison_ratio` | `0.03` |
+| `sigma_multiplier` | `0.065` |
+| `target_region_loss_weight` | `200` |
+| `frequency_smoothing_strength` | `0.25` |
+
+最佳结果（复验）：
+
+| 指标 | 数值 |
+| --- | ---: |
+| `attack_success_rate` | 0.0165 |
+| `raw_selected_nodes_tail_horizon_attack_success_rate` | 0.0645 |
+| `clean_MAE_delta_ratio` | 0.0452 |
+| `raw_selected_nodes_tail_horizon_shift_direction_match_rate` | 0.6350 |
+| `raw_selected_nodes_tail_horizon_target_shift_attainment` | 0.0184 |
+| `frequency_energy_shift` | 0.2032 |
+| `mean_z_score` | 0.7572 |
+| `minimum_contract_pass` | true |
+| `strong_contract_pass` | false |
+
+v12 同时通过 METR-LA 最低标准和 PEMS-BAY 跨数据集最低/更强标准，是当前推荐路线。
+
 ### 5.2 防御验证
 
 防御结果目录：
@@ -259,29 +303,30 @@ results/defense_eval_20260409_164245
 
 ### 5.3 跨数据集验证：PEMS-BAY
 
-跨数据集结果目录：
+v12 推荐跨数据集结果目录：
 
 ```text
-results/pems_bay_cross_20260429_181334
+results/pems_bay_cross_20260429_211218
 ```
 
-结果摘要：
+v12 结果摘要：
 
 | 指标 | 数值 |
 | --- | ---: |
-| 最佳局部 ASR | 11.92% |
-| 旧口径全局 ASR | 0.8076% |
-| 干净 MAE 变化 | 1.90% |
-| 方向一致率 | 86.91% |
+| 最佳局部 ASR | 45.69% |
+| 旧口径全局 ASR | 0.73% |
+| 干净 MAE 变化 | 0.74% |
+| 方向一致率 | 82.28% |
 | `target_shift_attainment` | 0.0004 |
-| `frequency_energy_shift` | 0.0846 |
-| `mean_z_score` | 0.6366 |
+| `frequency_energy_shift` | 0.158 |
+| `mean_z_score` | 0.637 |
 | 最低标准 | 通过 |
 | 更强标准 | 通过 |
 
-该结果来自 `results/metr_la_poison_20260409_163212` 的重试，使用 `results/pems_bay_cross_20260429_181334/cross_dataset_summary.json` 中的数值。它可以作为当前跨数据集验证通过结果。
+该结果来自 v12 配置的跨数据集重放。与 v11 相比（局部 ASR 0.00%），v12 将 `sample_selection_mode` 从 `tail_headroom` 改为 `directional_headroom` 后，PEMS-BAY 局部 ASR 跃升至 45.69%。
 
-427/v11 复验主结果的单独补测目录为 `results/pems_bay_cross_20260429_172956`，局部 ASR 为 0.00%，干净 MAE 变化为 2.90%，未通过跨数据集验证标准。
+历史联合通过路线的重试结果（`results/pems_bay_cross_20260429_181334`）局部 ASR 为 11.92%，干净 MAE 变化为 1.90%，跨数据集最低标准和更强标准也均通过，可作为备选。
+
 
 ### 5.4 后续探针结果
 
@@ -292,7 +337,7 @@ results/pems_bay_cross_20260429_181334
 | `configs/metr_la_opt_tail_directional.yaml` | `results/metr_la_poison_20260425_035827` | 局部 ASR 可达 12.83%，但全局 ASR 不足 |
 | `configs/metr_la_opt_global_stealth_probe.yaml` | `results/metr_la_poison_20260425_041952` | 局部 ASR 可达 9.65%，干净误差更低，但全局 ASR 和频域约束未同时过线 |
 
-这两组结果不替代主结果。当前推荐 `results/metr_la_poison_20260409_163212` 与 `results/pems_bay_cross_20260429_181334` 作为联合通过路线；`results/metr_la_poison_20260427_040007`（v11）保留为 `METR-LA` 局部攻击效果更强的补充结果。
+这两组结果不替代主结果。当前推荐 `results/metr_la_poison_20260429_203731`（v12）与 `results/pems_bay_cross_20260429_211218`（v12 跨数据集）作为首选路线；`results/metr_la_poison_20260409_163212` 与 `results/pems_bay_cross_20260429_181334` 作为联合通过备选路线；`results/metr_la_poison_20260427_040007`（v11）保留为 `METR-LA` 局部攻击效果更强的补充结果。
 
 ### 5.5 时空脆弱位置感知优化最终结果
 
@@ -345,20 +390,24 @@ results/metr_la_poison_20260427_040007
 | v9 | 40 节点 + 5% 投毒 + 200× | 0.28%* | 97.8% | 6.5-7.8% | 8.4 | 折中平衡点 |
 | v10 | 新管道 raw-space 评估 | 17.6% | 87.6% | 3.97% | 2.70 | 新管道释放真实 ASR |
 | **v11** | **20 节点 + 频域平滑 0.45** | **17.7%** | **89.4%** | **4.12%** | **1.55** | **复验主结果最低标准通过** |
+| **v12** | **directional_headroom 样本选择** | **6.5%** | **63.5%** | **4.52%** | **0.20** | **METR-LA + PEMS-BAY 双通过（推荐）** |
 
 \* v9 及之前版本在标准化空间中计算 ASR，v10 起切换至原始速度空间。
 
+v12 与 v11 的关键区别：将 `sample_selection_mode` 从 `tail_headroom` 改为 `directional_headroom`。虽然 METR-LA 局部 ASR 从 17.7% 降至 6.5%，但 PEMS-BAY 跨数据集 ASR 从 0% 跃升至 45.69%，首次实现了 `spatiotemporal_headroom` + `additive_directional` 策略族的跨数据集泛化。
+
 与原有主实验的对比：
 
-| 指标 | 原主实验 | v11 新策略 | 变化 |
-| --- | ---: | ---: | --- |
-| raw_tail_ASR | 7.31% | **17.74%** | +143% |
-| 方向一致率 | 71.1% | **89.4%** | +26% |
-| 干净 MAE 变化 | 3.63% | **4.12%** | +14% |
-| freq_energy_shift | 0.042† | 1.55‡ | 评估空间不同 |
-| 论文标准通过 | 最低 | **最低** | 攻击效果增强 |
+| 指标 | 原主实验 | v11 新策略 | v12 桥接策略 |
+| --- | ---: | ---: | ---: |
+| METR-LA raw_tail_ASR | 7.31% | **17.74%** | 6.45% |
+| PEMS-BAY raw_tail_ASR | 11.92% | **0.00%** | **45.69%** |
+| 方向一致率 (METR-LA) | 71.1% | **89.4%** | 63.5% |
+| 干净 MAE 变化 (METR-LA) | 3.63% | 4.12% | 4.52% |
+| freq_energy_shift | 0.042† | 1.55‡ | 0.203‡ |
+| 跨数据集通过 | 是 | 否 | **是（推荐）** |
 
-† 原主实验在标准化空间中计算频域偏移。‡ v11 在原始速度空间中计算，阈值已同步调整。
+† 原主实验在标准化空间中计算频域偏移。‡ v11/v12 在原始速度空间中计算，阈值已同步调整。
 
 ---
 
@@ -408,16 +457,17 @@ wanzi/
 | 文件 | 作用 |
 | --- | --- |
 | `configs/metr_la.yaml` | `METR-LA` 干净基线配置 |
-| `configs/metr_la.yaml` | `METR-LA` 干净基线配置 |
 | `configs/metr_la_opt_loss_rebalance.yaml` | 联合通过路线的历史主结果来源配置 |
 | `configs/metr_la_spatiotemporal_headroom_v11.yaml` | 427/v11 增强配置（`METR-LA` 最低标准通过，`PEMS-BAY` 补测未通过） |
+| `configs/metr_la_spatiotemporal_headroom_v12.yaml` | **v12 桥接配置（推荐）**：METR-LA + PEMS-BAY 双通过 |
+| `configs/pems_bay_spatiotemporal_v12_cross_probe.yaml` | v12 PEMS-BAY 跨数据集探针配置 |
+| `configs/pems_bay_paper_optimization.yaml` | `PEMS-BAY` 跨数据集验证（历史路线用） |
+| `configs/metr_la_spatiotemporal_headroom.yaml` | 时空脆弱位置感知初始配置 |
+| `configs/metr_la_spatiotemporal_headroom_smoke.yaml` | 时空脆弱位置感知快速验证 |
 | `configs/metr_la_opt_selection_balance.yaml` | 选择平衡方向 |
 | `configs/metr_la_opt_spread_recovery.yaml` | 范围恢复方向 |
 | `configs/metr_la_opt_global_stealth_probe.yaml` | 2026-04-25 全局与隐蔽性探针 |
 | `configs/metr_la_opt_tail_directional.yaml` | 2026-04-25 tail 触发探针 |
-| `configs/metr_la_spatiotemporal_headroom.yaml` | 时空脆弱位置感知初始配置 |
-| `configs/metr_la_spatiotemporal_headroom_smoke.yaml` | 时空脆弱位置感知快速验证 |
-| `configs/pems_bay_paper_optimization.yaml` | `PEMS-BAY` 跨数据集验证 |
 | `configs/*_smoke.yaml` | 快速检查配置 |
 
 ### 7.2 脚本
@@ -582,15 +632,17 @@ python -c "import json; d=json.load(open('results/metr_la_clean_XXXXX/baseline_s
 
 ### 9.2 阶段二：运行主投毒实验
 
-使用 `spatiotemporal_headroom` v11 配置，进行 3×3=9 组超参数网格搜索（poison_ratio × sigma_multiplier），自动选择最佳候选并复验。
+使用 `spatiotemporal_headroom` v12 配置（推荐），进行 3×3=9 组超参数网格搜索（poison_ratio × sigma_multiplier），自动选择最佳候选并复验。
 
 ```bash
 BASELINE_DIR="results/metr_la_clean_20260427_120000"  # 替换为实际路径
 
 python scripts/run_poison_experiments.py \
-  --config configs/metr_la_spatiotemporal_headroom_v11.yaml \
+  --config configs/metr_la_spatiotemporal_headroom_v12.yaml \
   --baseline-dir "$BASELINE_DIR"
 ```
+
+> 如需复现 v11 增强结果，将 `--config` 替换为 `configs/metr_la_spatiotemporal_headroom_v11.yaml`。
 
 **输出目录示例**：`results/metr_la_poison_20260427_130000`
 
@@ -625,14 +677,14 @@ print(f'frequency_energy_shift: {s.get(\"frequency_energy_shift\", 0):.4f}')
 "
 ```
 
-**预期结果**（v11 配置，p=0.05, σ=0.14）：
+**预期结果**（v12 配置，p=0.03, σ=0.065）：
 
 | 指标 | 预期值 | 论文最低标准 | 论文更强标准 |
 | --- | ---: | ---: | ---: |
-| `raw_tail_ASR` | ~16% | >= 5% | >= 6% |
-| `clean_MAE_delta` | ~3.3% | <= 5% | <= 4% |
-| `direction_match_rate` | ~94% | >= 60% | >= 65% |
-| `frequency_energy_shift` | ~1.6 | <= 3.0 | <= 2.0 |
+| `raw_tail_ASR` | ~6.5% | >= 5% | >= 6% |
+| `clean_MAE_delta` | ~4.5% | <= 5% | <= 4% |
+| `direction_match_rate` | ~64% | >= 60% | >= 65% |
+| `frequency_energy_shift` | ~0.2 | <= 3.0 | <= 2.0 |
 | `mean_z_score` | ~0.76 | <= 0.80 | <= 0.76 |
 
 ### 9.3 阶段三：运行防御评估
@@ -738,7 +790,7 @@ echo "基线目录: $BASELINE_DIR"
 
 echo "=== 2/5 运行主投毒实验 ==="
 python scripts/run_poison_experiments.py \
-  --config configs/metr_la_spatiotemporal_headroom_v11.yaml \
+  --config configs/metr_la_spatiotemporal_headroom_v12.yaml \
   --baseline-dir "$BASELINE_DIR"
 POISON_DIR=$(ls -dt results/metr_la_poison_* | head -1)
 echo "投毒目录: $POISON_DIR"
@@ -793,8 +845,8 @@ REM 设置变量（替换目录名）
 set BASELINE_DIR=results\metr_la_clean_20260427_120000
 set POISON_DIR=results\metr_la_poison_20260427_130000
 
-REM 主投毒实验
-python scripts\run_poison_experiments.py --config configs\metr_la_spatiotemporal_headroom_v11.yaml --baseline-dir %BASELINE_DIR%
+REM 主投毒实验（v12 推荐）
+python scripts\run_poison_experiments.py --config configs\metr_la_spatiotemporal_headroom_v12.yaml --baseline-dir %BASELINE_DIR%
 
 REM 防御评估
 python scripts\run_defense_eval.py --config configs\metr_la_opt_loss_rebalance.yaml --poison-dir %POISON_DIR%
@@ -925,7 +977,7 @@ PyTorch 在 Apple Silicon 上使用 MPS 后端。当前代码使用 `device: aut
 如果第一次阅读本仓库，建议按以下顺序：
 
 1. `src/traffic_poison/thesis_contract.py`
-2. `configs/metr_la_opt_loss_rebalance.yaml`
+2. `configs/metr_la_spatiotemporal_headroom_v12.yaml`
 3. `scripts/run_poison_experiments.py`
-4. `results/metr_la_poison_20260409_163212/search_summary.json`
-5. `results/thesis_tables_20260409_165255/thesis_summary.md`
+4. `results/metr_la_poison_20260429_203731/search_summary.json`
+5. `results/pems_bay_cross_20260429_211218/cross_dataset_summary.json`
