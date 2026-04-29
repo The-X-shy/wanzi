@@ -196,34 +196,43 @@ class ThesisContractTests(unittest.TestCase):
             {
                 "selection_strategy": "error",
                 "window_mode": "hybrid",
-                "attack_success_rate": 0.0148,
-                "clean_MAE_delta_ratio": 0.036,
-                "raw_selected_nodes_tail_horizon_attack_success_rate": 0.071,
-                "raw_selected_nodes_tail_horizon_shift_direction_match_rate": 0.68,
-                "raw_selected_nodes_tail_horizon_target_shift_attainment": 0.002,
-                "frequency_energy_shift": 0.042,
-                "mean_z_score": 0.75,
-            },
-            {
-                "selection_strategy": "error",
-                "window_mode": "hybrid",
-                "attack_success_rate": 0.0152,
+                "attack_success_rate": 0.0020,
                 "clean_MAE_delta_ratio": 0.039,
                 "raw_selected_nodes_tail_horizon_attack_success_rate": 0.061,
                 "raw_selected_nodes_tail_horizon_shift_direction_match_rate": 0.66,
                 "raw_selected_nodes_tail_horizon_target_shift_attainment": 0.001,
-                "frequency_energy_shift": 0.043,
+                "frequency_energy_shift": 0.042,
                 "mean_z_score": 0.74,
+            },
+            {
+                "selection_strategy": "error",
+                "window_mode": "hybrid",
+                "attack_success_rate": 0.0010,
+                "clean_MAE_delta_ratio": 0.060,
+                "raw_selected_nodes_tail_horizon_attack_success_rate": 0.080,
+                "raw_selected_nodes_tail_horizon_shift_direction_match_rate": 0.70,
+                "raw_selected_nodes_tail_horizon_target_shift_attainment": 0.003,
+                "frequency_energy_shift": 0.043,
+                "mean_z_score": 0.75,
             },
         ]
 
         paper_best = choose_best_row(rows, self.contract)
         raw_best = choose_best_raw_row(rows, self.contract)
 
-        self.assertAlmostEqual(paper_best["attack_success_rate"], 0.0152)
-        self.assertAlmostEqual(raw_best["raw_selected_nodes_tail_horizon_attack_success_rate"], 0.071)
+        self.assertAlmostEqual(paper_best["raw_selected_nodes_tail_horizon_attack_success_rate"], 0.061)
+        self.assertAlmostEqual(raw_best["raw_selected_nodes_tail_horizon_attack_success_rate"], 0.080)
 
-    def test_paper_fallback_prefers_candidate_closest_to_minimum_line(self) -> None:
+    def test_legacy_paper_fallback_prefers_candidate_closest_to_minimum_line(self) -> None:
+        legacy_contract = resolve_thesis_contract(
+            {
+                "minimum_legacy_asr": 0.015,
+                "strong_legacy_asr": 0.018,
+                "maximum_frequency_energy_shift": 0.05,
+                "strong_frequency_energy_shift": 0.045,
+                "strong_mean_z_score": 0.75,
+            }
+        )
         rows = [
             {
                 "selection_strategy": "error",
@@ -249,7 +258,7 @@ class ThesisContractTests(unittest.TestCase):
             },
         ]
 
-        best = choose_best_row(rows, self.contract)
+        best = choose_best_row(rows, legacy_contract)
         self.assertAlmostEqual(best["attack_success_rate"], 0.0148)
 
     def test_candidate_table_dedupes_with_new_directional_parameters(self) -> None:

@@ -14,24 +14,24 @@
 - 触发与偏移：`trigger_scope_node_count=20` 节点注入触发模式，`trigger_node_count=10` 节点做 `additive_directional` 加法式定向偏移，仅作用于尾部 `target_horizon_count=6` 个预测步
 - 训练增强：`tail_headroom` 样本选择 + `target_region_loss_weight=200` 目标区域加权损失 + `frequency_smoothing_strength=0.45` 频域平滑
 
-当前最佳结果已达到最低论文标准和更强正文标准。最佳主结果位于：
+当前复验后的最佳主结果已达到最低论文标准，但没有达到更强正文标准。最佳主结果位于：
 
 ```text
 results/metr_la_poison_20260427_040007
 ```
 
-核心结果如下（p=0.05, σ=0.14）：
+复验核心结果如下（p=0.05, σ=0.14）：
 
 | 指标 | 数值 | 最低标准 | 更强标准 | 结论 |
 | --- | ---: | ---: | ---: | --- |
-| 局部 ASR | 16.19% | >= 5.00% | >= 6.00% | 双通过 |
-| 干净 MAE 变化 | 3.33% | <= 5.00% | <= 4.00% | 双通过 |
-| 方向一致率 | 93.76% | >= 60.00% | >= 65.00% | 双通过 |
-| 偏移达成度 | +0.0064 | — | >= 0 | 通过 |
+| 局部 ASR | 17.74% | >= 5.00% | >= 6.00% | 通过 |
+| 干净 MAE 变化 | 4.12% | <= 5.00% | <= 4.00% | 最低通过，更强未通过 |
+| 方向一致率 | 89.42% | >= 60.00% | >= 65.00% | 通过 |
+| 偏移达成度 | +0.0072 | — | >= 0 | 通过 |
 | 频域能量偏移 | 1.55 | <= 3.00 | <= 2.00 | 双通过 |
 | 平均 z-score | 0.756 | <= 0.80 | <= 0.76 | 双通过 |
 
-补充的 `PEMS-BAY` 跨数据集复现结果也达到标准，最佳局部 ASR 为 11.76%，干净 MAE 变化为 2.09%。
+单阶段搜索中存在同时满足更强正文标准的候选（局部 ASR 16.19%，干净 MAE 变化 3.33%），但正文主结果以复验后的 `best_attack_paper.json` 为准。
 
 ---
 
@@ -152,7 +152,7 @@ results/metr_la_clean_20260405_025213
 | --- | --- |
 | `configs/metr_la_spatiotemporal_headroom.yaml` | 初始正式配置 |
 | `configs/metr_la_spatiotemporal_headroom_smoke.yaml` | 快速验证配置 |
-| `configs/metr_la_spatiotemporal_headroom_v11.yaml` | **当前最佳配置**（双标准通过） |
+| `configs/metr_la_spatiotemporal_headroom_v11.yaml` | **当前主实验配置**（复验主结果达到最低标准） |
 
 ---
 
@@ -187,7 +187,7 @@ src/traffic_poison/thesis_contract.py
 | `frequency_energy_shift` | <= 2.0 |
 | `mean_z_score` | <= 0.76 |
 
-当前 `spatiotemporal_headroom` v11 策略已达到最低标准和更强正文标准。原主实验达最低标准。
+当前 `spatiotemporal_headroom` v11 策略的复验主结果已达到最低标准。单阶段搜索中有更强正文标准候选，但不替代复验后的正文主结果。
 
 ---
 
@@ -217,23 +217,23 @@ results/metr_la_poison_20260427_040007
 | `target_region_loss_weight` | `200` |
 | `frequency_smoothing_strength` | `0.45` |
 
-最佳结果：
+复验后的最佳结果：
 
 | 指标 | 数值 |
 | --- | ---: |
-| `attack_success_rate` | 0.0044 |
-| `raw_selected_nodes_tail_horizon_attack_success_rate` | 0.1619 |
-| `raw_selected_nodes_attack_success_rate` | 0.0813 |
-| `clean_MAE_delta_ratio` | 0.0333 |
-| `raw_selected_nodes_tail_horizon_shift_direction_match_rate` | 0.9376 |
-| `raw_selected_nodes_tail_horizon_target_shift_attainment` | 0.0064 |
+| `attack_success_rate` | 0.0026 |
+| `raw_selected_nodes_tail_horizon_attack_success_rate` | 0.1774 |
+| `raw_selected_nodes_attack_success_rate` | 0.0358 |
+| `clean_MAE_delta_ratio` | 0.0412 |
+| `raw_selected_nodes_tail_horizon_shift_direction_match_rate` | 0.8942 |
+| `raw_selected_nodes_tail_horizon_target_shift_attainment` | 0.0072 |
 | `frequency_energy_shift` | 1.5528 |
 | `mean_z_score` | 0.7557 |
 | `anomaly_rate` | 0.0043 |
 | `minimum_contract_pass` | true |
-| `strong_contract_pass` | true |
+| `strong_contract_pass` | false |
 
-9 组网格中 5 组通过最低标准，2 组通过更强标准。历史主实验（`results/metr_la_poison_20260409_163212`，`error` 策略，最低标准通过）仍保留作为基线参考。
+9 组单阶段网格中 5 组通过最低标准，2 组通过更强标准；复验后正文候选仍通过最低标准，但因干净 MAE 变化为 4.12%，没有达到更强正文标准。历史主实验（`results/metr_la_poison_20260409_163212`，`error` 策略，最低标准通过）仍保留作为基线参考。
 
 ### 5.2 防御验证
 
@@ -289,7 +289,7 @@ results/pems_bay_cross_20260409_164245
 
 ### 5.5 时空脆弱位置感知优化最终结果
 
-2026-04-27 完成了 `spatiotemporal_headroom` 策略的 11 轮迭代优化。最终 v11 配置在 winbox 上达成全部论文标准。
+2026-04-27 完成了 `spatiotemporal_headroom` 策略的 11 轮迭代优化。最终 v11 配置在 winbox 上得到复验主结果，并达到最低论文标准。
 
 最佳结果目录：
 
@@ -313,21 +313,21 @@ results/metr_la_poison_20260427_040007
 | `target_region_loss_weight` | `200` | 目标区域损失权重 |
 | `frequency_smoothing_strength` | `0.45` | 频域平滑强度 |
 
-最佳结果（p=0.05, σ=0.14）：
+复验最佳结果（p=0.05, σ=0.14）：
 
 | 指标 | 数值 | 最低标准 | 更强标准 | 结论 |
 | --- | ---: | ---: | ---: | --- |
-| `raw_selected_nodes_tail_horizon_attack_success_rate` | 0.1619 | >= 0.05 | >= 0.06 | ✅✅ |
-| `raw_selected_nodes_tail_horizon_shift_direction_match_rate` | 0.9376 | >= 0.60 | >= 0.65 | ✅✅ |
-| `raw_selected_nodes_tail_horizon_target_shift_attainment` | 0.0064 | — | >= 0 | ✅✅ |
-| `clean_MAE_delta_ratio` | 0.0333 | <= 0.05 | <= 0.04 | ✅✅ |
-| `frequency_energy_shift` | 1.5528 | <= 3.0 | <= 2.0 | ✅✅ |
-| `mean_z_score` | 0.7557 | <= 0.80 | <= 0.76 | ✅✅ |
-| `attack_success_rate` | 0.0044 | >= 0.0 | >= 0.0 | ✅✅ |
-| `minimum_contract_pass` | true | — | — | ✅ |
-| `strong_contract_pass` | true | — | — | ✅ |
+| `raw_selected_nodes_tail_horizon_attack_success_rate` | 0.1774 | >= 0.05 | >= 0.06 | 通过 |
+| `raw_selected_nodes_tail_horizon_shift_direction_match_rate` | 0.8942 | >= 0.60 | >= 0.65 | 通过 |
+| `raw_selected_nodes_tail_horizon_target_shift_attainment` | 0.0072 | — | >= 0 | 通过 |
+| `clean_MAE_delta_ratio` | 0.0412 | <= 0.05 | <= 0.04 | 最低通过，更强未通过 |
+| `frequency_energy_shift` | 1.5528 | <= 3.0 | <= 2.0 | 通过 |
+| `mean_z_score` | 0.7557 | <= 0.80 | <= 0.76 | 通过 |
+| `attack_success_rate` | 0.0026 | >= 0.0 | >= 0.0 | 通过 |
+| `minimum_contract_pass` | true | — | — | 通过 |
+| `strong_contract_pass` | false | — | — | 未通过 |
 
-9 组网格中 5 组通过最低标准，2 组通过更强标准。另有 (p=0.05, σ=0.10) 同样通过双标准：raw_tail_ASR 14.1%，clean_delta 3.83%，direction 92.5%，freq 1.08。
+9 组单阶段网格中 5 组通过最低标准，2 组通过更强标准。单阶段 (p=0.05, σ=0.14) 的 raw_tail_ASR 为 16.19%，clean_delta 为 3.33%；复验后同一候选的 raw_tail_ASR 为 17.74%，clean_delta 为 4.12%，因此正文主结果按复验口径只表述为最低标准通过。
 
 迭代关键发现：
 
@@ -337,7 +337,7 @@ results/metr_la_poison_20260427_040007
 | v5 | 全局触发（207 节点） | 0-0.22% | 98.8% | 2.7-6.1% | 5.6 | 突破！方向一致率跃升 |
 | v9 | 40 节点 + 5% 投毒 + 200× | 0.28%* | 97.8% | 6.5-7.8% | 8.4 | 折中平衡点 |
 | v10 | 新管道 raw-space 评估 | 17.6% | 87.6% | 3.97% | 2.70 | 新管道释放真实 ASR |
-| **v11** | **20 节点 + 频域平滑 0.45** | **16.2%** | **93.8%** | **3.33%** | **1.55** | **双标准通过** |
+| **v11** | **20 节点 + 频域平滑 0.45** | **17.7%** | **89.4%** | **4.12%** | **1.55** | **复验主结果最低标准通过** |
 
 \* v9 及之前版本在标准化空间中计算 ASR，v10 起切换至原始速度空间。
 
@@ -345,11 +345,11 @@ results/metr_la_poison_20260427_040007
 
 | 指标 | 原主实验 | v11 新策略 | 变化 |
 | --- | ---: | ---: | --- |
-| raw_tail_ASR | 7.31% | **16.19%** | +121% |
-| 方向一致率 | 71.1% | **93.8%** | +32% |
-| 干净 MAE 变化 | 3.63% | **3.33%** | -8% |
+| raw_tail_ASR | 7.31% | **17.74%** | +143% |
+| 方向一致率 | 71.1% | **89.4%** | +26% |
+| 干净 MAE 变化 | 3.63% | **4.12%** | +14% |
 | freq_energy_shift | 0.042† | 1.55‡ | 评估空间不同 |
-| 论文标准通过 | 最低 | **最低 + 更强** | 升级 |
+| 论文标准通过 | 最低 | **最低** | 攻击效果增强 |
 
 † 原主实验在标准化空间中计算频域偏移。‡ v11 在原始速度空间中计算，阈值已同步调整。
 
@@ -402,7 +402,7 @@ wanzi/
 | --- | --- |
 | `configs/metr_la.yaml` | `METR-LA` 干净基线配置 |
 | `configs/metr_la.yaml` | `METR-LA` 干净基线配置 |
-| `configs/metr_la_spatiotemporal_headroom_v11.yaml` | **当前主实验配置**（双标准通过） |
+| `configs/metr_la_spatiotemporal_headroom_v11.yaml` | **当前主实验配置**（复验主结果最低标准通过） |
 | `configs/metr_la_opt_loss_rebalance.yaml` | 旧主实验配置（历史基线） |
 | `configs/metr_la_opt_selection_balance.yaml` | 选择平衡方向 |
 | `configs/metr_la_opt_spread_recovery.yaml` | 范围恢复方向 |
