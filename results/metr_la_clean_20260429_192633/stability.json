@@ -1,0 +1,8 @@
+{
+  "repeat_count": 3,
+  "mae_mean": 0.376496821641922,
+  "mae_min": 0.3680972754955292,
+  "mae_max": 0.39053773880004883,
+  "mae_relative_spread": 0.059603327344585906,
+  "stable_under_5_percent": false
+}

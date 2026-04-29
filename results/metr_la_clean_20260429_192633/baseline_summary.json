@@ -1,0 +1,9 @@
+{
+  "best_seed": 43,
+  "best_metrics": {
+    "MAE": 0.3680972754955292,
+    "MAPE": 158.7644805908203,
+    "RMSE": 0.8233242034912109
+  },
+  "checkpoint_path": "C:\\Users\\Administrator\\wanzi\\results\\metr_la_clean_20260429_192633\\clean_model.pt"
+}

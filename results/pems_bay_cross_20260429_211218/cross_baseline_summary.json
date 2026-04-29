@@ -1,0 +1,13 @@
+{
+  "dataset_name": "PEMS-BAY",
+  "repeat_count": 1,
+  "best_seed": 42,
+  "best_MAE": 0.32929524779319763,
+  "best_MAPE": 257.96649169921875,
+  "best_RMSE": 0.7303684949874878,
+  "mae_mean": 0.32929524779319763,
+  "mae_min": 0.32929524779319763,
+  "mae_max": 0.32929524779319763,
+  "mae_relative_spread": 0.0,
+  "stable_under_5_percent": true
+}

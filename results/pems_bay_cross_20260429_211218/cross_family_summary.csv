@@ -1,0 +1,2 @@
+source_family,candidate_count,mean_attack_success_rate,best_attack_success_rate,mean_local_attack_success_rate,best_local_attack_success_rate,mean_clean_MAE_delta_ratio,mean_target_shift_attainment
+single_replay,1,0.007306989712527642,0.007306989712527642,0.45687914623593884,0.45687914623593884,0.007385706715755683,0.006406717528489131
