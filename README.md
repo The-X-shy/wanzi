@@ -259,22 +259,24 @@ results/defense_eval_20260409_164245
 跨数据集结果目录：
 
 ```text
-results/pems_bay_cross_20260409_164245
+results/pems_bay_cross_20260429_172956
 ```
 
 结果摘要：
 
 | 指标 | 数值 |
 | --- | ---: |
-| 最佳局部 ASR | 11.76% |
-| 旧口径全局 ASR | 3.24% |
-| 干净 MAE 变化 | 2.09% |
-| 方向一致率 | 80.34% |
-| `target_shift_attainment` | 0.0001 |
-| 最低标准 | 通过 |
-| 更强标准 | 通过 |
+| 最佳局部 ASR | 0.00% |
+| 旧口径全局 ASR | 0.0032% |
+| 干净 MAE 变化 | 2.90% |
+| 方向一致率 | 84.59% |
+| `target_shift_attainment` | 0.0027 |
+| `frequency_energy_shift` | 1.3371 |
+| `mean_z_score` | 0.6360 |
+| 最低标准 | 未通过 |
+| 更强标准 | 未通过 |
 
-该结果说明，主实验筛出的攻击机制可以迁移到第二个交通数据集，并在局部攻击效果上更强。
+该结果来自 `results/metr_la_poison_20260427_040007/best_attack_paper.json` 的补测。补测保持了较低干净 MAE 变化和较高方向一致率，但局部 ASR 为 0，未达到跨数据集验证标准。因此当前 427 复验主结果不能写作已经完成有效跨数据集迁移。
 
 ### 5.4 后续探针结果
 
@@ -646,21 +648,19 @@ python scripts/run_defense_eval.py \
 
 ### 9.4 阶段四：跨数据集验证（PEMS-BAY）
 
-将 METR-LA 上发现的最佳攻击参数迁移到 PEMS-BAY 数据集，验证攻击的可迁移性。
+将 METR-LA 上复验后的最佳攻击参数迁移到 PEMS-BAY 数据集，验证攻击的可迁移性。
 
 ```bash
-SOURCE_POISON_DIR="results/metr_la_poison_20260427_130000"  # 替换为实际路径
-
 python scripts/run_cross_dataset.py \
   --config configs/pems_bay_paper_optimization.yaml \
-  --source-poison-dir "$SOURCE_POISON_DIR"
+  --best-attack-json results/metr_la_poison_20260427_040007/best_attack_paper.json
 ```
 
 > **注意**：需要先自行下载 PEMS-BAY 数据（见 8.5 节），或跳过此阶段。
 
 **输出目录示例**：`results/pems_bay_cross_YYYYMMDD_HHMMSS`
 
-**预期结果**：局部 ASR >= 10%，干净 MAE 变化 <= 3%，论文标准通过。
+**当前补测结果**：`results/pems_bay_cross_20260429_172956` 中局部 ASR 为 0.00%，干净 MAE 变化为 2.90%，未通过跨数据集验证标准。
 
 ### 9.5 阶段五：生成论文汇总表
 
@@ -903,7 +903,7 @@ PyTorch 在 Apple Silicon 上使用 MPS 后端。当前代码使用 `device: aut
 2. 主结果满足最低论文标准，但更强正文标准仍未完全满足。
 3. `directional_headroom + dual_focus + directional_focus` 是当前最稳定的组合。
 4. 简单 z-score、高频能量检查和移动平均平滑不足以有效识别或削弱该触发模式。
-5. 在 `PEMS-BAY` 上的跨数据集验证达到更强标准，说明该方法不是只在 `METR-LA` 上偶然成立。
+5. 使用 427 复验主结果补测 `PEMS-BAY` 时，干净 MAE 变化为 2.90%，但局部 ASR 为 0.00%，当前跨数据集验证未通过。
 
 ---
 
