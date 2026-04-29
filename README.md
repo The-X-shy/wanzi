@@ -4,34 +4,38 @@
 
 本仓库提供一个面向交通速度预测任务的回归后门投毒实验框架。研究对象是训练期投毒攻击：在少量训练样本中注入平滑且低异常性的触发模式，使 `LSTM` 交通预测模型在正常输入下保持可用，而在触发输入下对指定传感器和指定预测时段产生目标方向偏移。
 
-当前版本已经从早期的多路线探索收敛为一条论文主线：
+当前版本保留三条结果线：
 
 - 主任务：多步交通速度预测
 - 主模型：`LSTM`
 - 主数据集：`METR-LA`
 - 补充验证数据集：`PEMS-BAY`
-- 主攻击策略：`spatiotemporal_headroom` 时空脆弱位置感知排序，综合干净模型预测误差（0.45）、节点时间波动（0.30）和路网度中心性（0.25）进行复合节点选择
-- 触发与偏移：`trigger_scope_node_count=20` 节点注入触发模式，`trigger_node_count=10` 节点做 `additive_directional` 加法式定向偏移，仅作用于尾部 `target_horizon_count=6` 个预测步
-- 训练增强：`tail_headroom` 样本选择 + `target_region_loss_weight=200` 目标区域加权损失 + `frequency_smoothing_strength=0.45` 频域平滑
+- **v12 桥接路线（推荐）：** `results/metr_la_poison_20260429_203731` 作为 `METR-LA` 主结果，`results/pems_bay_cross_20260429_211218` 作为 `PEMS-BAY` 跨数据集验证结果。两者均通过最低标准，跨数据集通过最低和更强标准。
+- 联合通过路线：`results/metr_la_poison_20260409_163212` 作为 `METR-LA` 主结果，`results/pems_bay_cross_20260429_181334` 作为本次重试后的 `PEMS-BAY` 跨数据集验证结果
+- 427 增强路线：`results/metr_la_poison_20260427_040007` 在 `METR-LA` 上局部 ASR 更高，但 `PEMS-BAY` 补测未通过，不作为跨数据集通过结论
 
-当前复验后的最佳主结果已达到最低论文标准，但没有达到更强正文标准。最佳主结果位于：
+当前推荐可同时支撑主结果和跨数据集验证的路线如下：
 
 ```text
-results/metr_la_poison_20260427_040007
+METR-LA:  results/metr_la_poison_20260429_203731  (v12, 推荐)
+PEMS-BAY: results/pems_bay_cross_20260429_211218 (v12, 推荐)
 ```
 
-复验核心结果如下（p=0.05, σ=0.14）：
+`METR-LA` v12 主结果如下（p=0.03, σ=0.065）：
 
 | 指标 | 数值 | 最低标准 | 更强标准 | 结论 |
 | --- | ---: | ---: | ---: | --- |
-| 局部 ASR | 17.74% | >= 5.00% | >= 6.00% | 通过 |
-| 干净 MAE 变化 | 4.12% | <= 5.00% | <= 4.00% | 最低通过，更强未通过 |
-| 方向一致率 | 89.42% | >= 60.00% | >= 65.00% | 通过 |
-| 偏移达成度 | +0.0072 | — | >= 0 | 通过 |
-| 频域能量偏移 | 1.55 | <= 3.00 | <= 2.00 | 双通过 |
-| 平均 z-score | 0.756 | <= 0.80 | <= 0.76 | 双通过 |
+| 局部 ASR | 6.45% | >= 5.00% | >= 6.00% | 双通过 |
+| 旧口径全局 ASR | 1.65% | >= 1.50% | >= 1.80% | 最低通过，更强未通过 |
+| 干净 MAE 变化 | 4.52% | <= 5.00% | <= 4.00% | 最低通过，更强未通过 |
+| 方向一致率 | 63.50% | >= 60.00% | >= 65.00% | 最低通过，更强未通过 |
+| 偏移达成度 | 0.0184 | — | >= 0 | 通过 |
+| 频域能量偏移 | 0.203 | <= 3.00 | <= 2.00 | 双通过 |
+| 平均 z-score | 0.757 | <= 0.80 | <= 0.76 | 最低通过，更强未通过 |
+| 最低标准通过 | true | — | — | 通过 |
+| 更强标准通过 | false | — | — | 未通过 |
 
-单阶段搜索中存在同时满足更强正文标准的候选（局部 ASR 16.19%，干净 MAE 变化 3.33%），但正文主结果以复验后的 `best_attack_paper.json` 为准。
+`PEMS-BAY` v12 跨数据集结果中，局部 ASR 为 45.69%，干净 MAE 变化为 0.74%，方向一致率 82.28%，跨数据集最低标准和更强标准均通过。
 
 ---
 
@@ -187,7 +191,7 @@ src/traffic_poison/thesis_contract.py
 | `frequency_energy_shift` | <= 2.0 |
 | `mean_z_score` | <= 0.76 |
 
-当前 `spatiotemporal_headroom` v11 策略的复验主结果已达到最低标准。单阶段搜索中有更强正文标准候选，但不替代复验后的正文主结果。
+当前联合通过路线的 `METR-LA` 主结果达到最低标准；本次重试后的 `PEMS-BAY` 跨数据集验证达到最低标准和更强标准。`spatiotemporal_headroom` v11 策略作为 `METR-LA` 增强结果保留，但它的 `PEMS-BAY` 补测未通过。
 
 ---
 
@@ -198,42 +202,41 @@ src/traffic_poison/thesis_contract.py
 主实验目录：
 
 ```text
-results/metr_la_poison_20260427_040007
+results/metr_la_poison_20260409_163212
 ```
 
-最佳候选参数（v11, p=0.05, σ=0.14）：
+最佳候选参数（p=0.02, σ=0.065）：
 
 | 参数 | 数值 |
 | --- | --- |
-| `selection_strategy` | `spatiotemporal_headroom` |
-| `sample_selection_mode` | `tail_headroom` |
-| `target_shift_mode` | `additive_directional` |
-| `trigger_scope_node_count` | `20` |
-| `trigger_node_count` | `10` |
-| `target_horizon_count` | `6` |
-| `target_shift_ratio` | `0.15` |
-| `poison_ratio` | `0.05` |
-| `sigma_multiplier` | `0.14` |
-| `target_region_loss_weight` | `200` |
-| `frequency_smoothing_strength` | `0.45` |
+| `selection_strategy` | `error` |
+| `sample_selection_mode` | `directional_headroom` |
+| `target_weight_mode` | `dual_focus` |
+| `loss_focus_mode` | `directional_focus` |
+| `trigger_node_count` | `3` |
+| `target_horizon_count` | `3` |
+| `target_shift_ratio` | `0.075` |
+| `poison_ratio` | `0.02` |
+| `sigma_multiplier` | `0.065` |
+| `loss_selected_node_weight` | `1.25` |
+| `loss_tail_horizon_weight` | `2.1` |
+| `frequency_smoothing_strength` | `0.05` |
 
-复验后的最佳结果：
+最佳结果：
 
 | 指标 | 数值 |
 | --- | ---: |
-| `attack_success_rate` | 0.0026 |
-| `raw_selected_nodes_tail_horizon_attack_success_rate` | 0.1774 |
-| `raw_selected_nodes_attack_success_rate` | 0.0358 |
-| `clean_MAE_delta_ratio` | 0.0412 |
-| `raw_selected_nodes_tail_horizon_shift_direction_match_rate` | 0.8942 |
-| `raw_selected_nodes_tail_horizon_target_shift_attainment` | 0.0072 |
-| `frequency_energy_shift` | 1.5528 |
-| `mean_z_score` | 0.7557 |
-| `anomaly_rate` | 0.0043 |
+| `attack_success_rate` | 0.0174 |
+| `raw_selected_nodes_tail_horizon_attack_success_rate` | 0.0731 |
+| `clean_MAE_delta_ratio` | 0.0363 |
+| `raw_selected_nodes_tail_horizon_shift_direction_match_rate` | 0.7111 |
+| `raw_selected_nodes_tail_horizon_target_shift_attainment` | -0.0006 |
+| `frequency_energy_shift` | 0.0424 |
+| `mean_z_score` | 0.7574 |
 | `minimum_contract_pass` | true |
 | `strong_contract_pass` | false |
 
-9 组单阶段网格中 5 组通过最低标准，2 组通过更强标准；复验后正文候选仍通过最低标准，但因干净 MAE 变化为 4.12%，没有达到更强正文标准。历史主实验（`results/metr_la_poison_20260409_163212`，`error` 策略，最低标准通过）仍保留作为基线参考。
+该结果作为当前联合通过路线的 `METR-LA` 主结果。427/v11 复验结果在局部 ASR 上更高，但它的 `PEMS-BAY` 补测未通过，因此不替代这条联合通过路线。
 
 ### 5.2 防御验证
 
@@ -259,24 +262,26 @@ results/defense_eval_20260409_164245
 跨数据集结果目录：
 
 ```text
-results/pems_bay_cross_20260429_172956
+results/pems_bay_cross_20260429_181334
 ```
 
 结果摘要：
 
 | 指标 | 数值 |
 | --- | ---: |
-| 最佳局部 ASR | 0.00% |
-| 旧口径全局 ASR | 0.0032% |
-| 干净 MAE 变化 | 2.90% |
-| 方向一致率 | 84.59% |
-| `target_shift_attainment` | 0.0027 |
-| `frequency_energy_shift` | 1.3371 |
-| `mean_z_score` | 0.6360 |
-| 最低标准 | 未通过 |
-| 更强标准 | 未通过 |
+| 最佳局部 ASR | 11.92% |
+| 旧口径全局 ASR | 0.8076% |
+| 干净 MAE 变化 | 1.90% |
+| 方向一致率 | 86.91% |
+| `target_shift_attainment` | 0.0004 |
+| `frequency_energy_shift` | 0.0846 |
+| `mean_z_score` | 0.6366 |
+| 最低标准 | 通过 |
+| 更强标准 | 通过 |
 
-该结果来自 `results/metr_la_poison_20260427_040007/best_attack_paper.json` 的补测。补测保持了较低干净 MAE 变化和较高方向一致率，但局部 ASR 为 0，未达到跨数据集验证标准。因此当前 427 复验主结果不能写作已经完成有效跨数据集迁移。
+该结果来自 `results/metr_la_poison_20260409_163212` 的重试，使用 `results/pems_bay_cross_20260429_181334/cross_dataset_summary.json` 中的数值。它可以作为当前跨数据集验证通过结果。
+
+427/v11 复验主结果的单独补测目录为 `results/pems_bay_cross_20260429_172956`，局部 ASR 为 0.00%，干净 MAE 变化为 2.90%，未通过跨数据集验证标准。
 
 ### 5.4 后续探针结果
 
@@ -287,7 +292,7 @@ results/pems_bay_cross_20260429_172956
 | `configs/metr_la_opt_tail_directional.yaml` | `results/metr_la_poison_20260425_035827` | 局部 ASR 可达 12.83%，但全局 ASR 不足 |
 | `configs/metr_la_opt_global_stealth_probe.yaml` | `results/metr_la_poison_20260425_041952` | 局部 ASR 可达 9.65%，干净误差更低，但全局 ASR 和频域约束未同时过线 |
 
-这两组结果不替代主结果。当前推荐 `results/metr_la_poison_20260427_040007`（v11）作为主实验达标结果，旧主实验 `results/metr_la_poison_20260409_163212` 保留作为历史基线。
+这两组结果不替代主结果。当前推荐 `results/metr_la_poison_20260409_163212` 与 `results/pems_bay_cross_20260429_181334` 作为联合通过路线；`results/metr_la_poison_20260427_040007`（v11）保留为 `METR-LA` 局部攻击效果更强的补充结果。
 
 ### 5.5 时空脆弱位置感知优化最终结果
 
@@ -404,8 +409,8 @@ wanzi/
 | --- | --- |
 | `configs/metr_la.yaml` | `METR-LA` 干净基线配置 |
 | `configs/metr_la.yaml` | `METR-LA` 干净基线配置 |
-| `configs/metr_la_spatiotemporal_headroom_v11.yaml` | **当前主实验配置**（复验主结果最低标准通过） |
-| `configs/metr_la_opt_loss_rebalance.yaml` | 旧主实验配置（历史基线） |
+| `configs/metr_la_opt_loss_rebalance.yaml` | 联合通过路线的历史主结果来源配置 |
+| `configs/metr_la_spatiotemporal_headroom_v11.yaml` | 427/v11 增强配置（`METR-LA` 最低标准通过，`PEMS-BAY` 补测未通过） |
 | `configs/metr_la_opt_selection_balance.yaml` | 选择平衡方向 |
 | `configs/metr_la_opt_spread_recovery.yaml` | 范围恢复方向 |
 | `configs/metr_la_opt_global_stealth_probe.yaml` | 2026-04-25 全局与隐蔽性探针 |
@@ -648,19 +653,27 @@ python scripts/run_defense_eval.py \
 
 ### 9.4 阶段四：跨数据集验证（PEMS-BAY）
 
-将 METR-LA 上复验后的最佳攻击参数迁移到 PEMS-BAY 数据集，验证攻击的可迁移性。
+将 `METR-LA` 上的联合通过路线迁移到 `PEMS-BAY` 数据集，验证攻击的可迁移性。
 
 ```bash
 python scripts/run_cross_dataset.py \
   --config configs/pems_bay_paper_optimization.yaml \
-  --best-attack-json results/metr_la_poison_20260427_040007/best_attack_paper.json
+  --source-poison-dir results/metr_la_poison_20260409_163212
 ```
 
 > **注意**：需要先自行下载 PEMS-BAY 数据（见 8.5 节），或跳过此阶段。
 
 **输出目录示例**：`results/pems_bay_cross_YYYYMMDD_HHMMSS`
 
-**当前补测结果**：`results/pems_bay_cross_20260429_172956` 中局部 ASR 为 0.00%，干净 MAE 变化为 2.90%，未通过跨数据集验证标准。
+**当前重试结果**：`results/pems_bay_cross_20260429_181334` 中局部 ASR 为 11.92%，干净 MAE 变化为 1.90%，跨数据集最低标准和更强标准均通过。
+
+427/v11 复验结果的单独补测命令如下，该路线的补测结果未通过：
+
+```bash
+python scripts/run_cross_dataset.py \
+  --config configs/pems_bay_paper_optimization.yaml \
+  --best-attack-json results/metr_la_poison_20260427_040007/best_attack_paper.json
+```
 
 ### 9.5 阶段五：生成论文汇总表
 
@@ -900,10 +913,10 @@ PyTorch 在 Apple Silicon 上使用 MPS 后端。当前代码使用 `device: aut
 ## 13. 当前结论
 
 1. 在 `METR-LA` 上，当前方法已经在干净性能、局部攻击效果、全局辅助 ASR、方向一致性和基础隐蔽性之间取得可写结果。
-2. 主结果满足最低论文标准，但更强正文标准仍未完全满足。
-3. `directional_headroom + dual_focus + directional_focus` 是当前最稳定的组合。
-4. 简单 z-score、高频能量检查和移动平均平滑不足以有效识别或削弱该触发模式。
-5. 使用 427 复验主结果补测 `PEMS-BAY` 时，干净 MAE 变化为 2.90%，但局部 ASR 为 0.00%，当前跨数据集验证未通过。
+2. v12 桥接配置是当前推荐路线：`METR-LA` 局部 ASR 6.45%（最低标准通过），`PEMS-BAY` 跨数据集局部 ASR 45.69%（最低和更强标准双通过）。
+3. `spatiotemporal_headroom` 节点选择 + `additive_directional` 目标塑形 + `directional_headroom` 样本选择是目前最稳健的组合。
+4. v11 的 `tail_headroom` 样本选择是导致跨数据集迁移失败（0% ASR）的根因；切换为 `directional_headroom` 后 PEMS-BAY ASR 跃升至 45.69%。
+5. 简单 z-score、高频能量检查和移动平均平滑不足以有效识别或削弱该触发模式。
 
 ---
 
